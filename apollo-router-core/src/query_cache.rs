@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::prelude::graphql::*;
 use crate::CacheCallback;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -46,6 +46,37 @@ mod my_cache_tests {
         assert_eq!(true, my_new_cache.get(&13).await.unwrap());
         assert_eq!(false, my_new_cache.get(&22).await.unwrap());
     }
+
+    use futures::future::join_all;
+    use mockall::automock;
+    #[automock]
+    trait CalledOnce {
+        fn call(&self) -> u8;
+    }
+
+    #[tokio::test]
+    async fn it_doesnt_compute_the_same_key_twice() {
+        let mut mock = MockCalledOnce::new();
+        mock.expect_call().times(1).return_const(42);
+
+        let can_only_be_computed_once = move |_: &u8| {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            mock.call()
+        };
+
+        let my_cache = MyCacheBuilder::default()
+            .with_size(1)
+            .with_filler(Box::new(can_only_be_computed_once))
+            .build()
+            .unwrap();
+
+        // Let's trigger several computations and make sure the computation doesn't happen several times
+        let computations = (1..=10).map(|_| my_cache.get(&1));
+        let _ = join_all(computations)
+            .await
+            .into_iter()
+            .map(|res| assert_eq!(42, res.unwrap()));
+    }
 }
 
 // Mycache has a getter that takes a key, that only gets cloned if the cache is missed.
@@ -71,7 +102,18 @@ where
             return Ok(v.clone());
         }
 
-        self.in_flight.insert(key).await?;
+        if self.in_flight.insert(key).await? {
+            // Someone is already populating the cache for `key`
+            self.in_flight.wait_until_computed(key).await;
+            // It should be in the cache now
+            return Ok(self
+                .cache
+                .lock()
+                .await
+                .get(key)
+                .expect("we waited until the cache was populated;qed")
+                .clone());
+        }
 
         let computed_value = (*self.filler)(key);
 
@@ -168,7 +210,7 @@ struct InFlight<'inflight, Key>
 where
     Key: Hash + Eq + Clone,
 {
-    in_flight: Arc<Mutex<HashSet<&'inflight Key>>>,
+    in_flight: Arc<Mutex<HashMap<&'inflight Key, Arc<AtomicWaker>>>>,
     is_live: AtomicBool,
     shutdown_watcher: ShutdownWatcher,
 }
@@ -190,19 +232,36 @@ impl<'inflight, Key> InFlight<'inflight, Key>
 where
     Key: Hash + Eq + Clone,
 {
-    pub async fn insert(&self, key: &'inflight Key) -> Result<(), CacheError> {
+    pub async fn wait_until_computed(&self, key: &'inflight Key) {
+        match self.in_flight.lock().await.get(key) {
+            Some(waker) => InFlightRequestWatcher::new(Arc::clone(&waker)).await,
+            // This computation is not in flight, we can safely return
+            None => {}
+        }
+    }
+
+    pub async fn insert(&self, key: &'inflight Key) -> Result<bool, CacheError> {
         if !self.is_live.load(Ordering::SeqCst) {
             return Err(CacheError::Shuttingdown);
         }
 
         self.shutdown_watcher.increment();
-        self.in_flight.lock().await.insert(key);
-
-        Ok(())
+        Ok(self
+            .in_flight
+            .lock()
+            .await
+            .insert(key, Default::default())
+            .is_some())
     }
 
     pub async fn remove(&self, key: &'inflight Key) -> Result<(), CacheError> {
-        self.in_flight.lock().await.remove(key);
+        // Notify clients waiting for the computation to have happened
+        self.in_flight
+            .lock()
+            .await
+            .remove(key)
+            .map(|waker| waker.wake());
+
         self.shutdown_watcher.decrement();
         Ok(())
     }
@@ -213,6 +272,29 @@ where
         }
 
         Ok(self.shutdown_watcher.await)
+    }
+}
+
+#[derive(Default)]
+
+struct InFlightRequestWatcher {
+    waker: Arc<AtomicWaker>,
+}
+
+impl InFlightRequestWatcher {
+    pub fn new(waker: Arc<AtomicWaker>) -> Self {
+        Self { waker }
+    }
+}
+
+impl Future for InFlightRequestWatcher {
+    type Output = ();
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        self.waker.register(cx.waker());
+        Poll::Ready(())
     }
 }
 
