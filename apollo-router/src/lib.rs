@@ -275,8 +275,8 @@ pub enum ShutdownKind {
     Custom(#[derivative(Debug = "ignore")] ShutdownFuture),
 
     /// Watch for Ctl-C signal.
-    #[display(fmt = "CtrlC")]
-    CtrlC,
+    #[display(fmt = "Signal (Ctrl-C or SIGHUP")]
+    Signal,
 }
 
 impl ShutdownKind {
@@ -285,14 +285,47 @@ impl ShutdownKind {
         match self {
             ShutdownKind::None => stream::pending::<Event>().boxed(),
             ShutdownKind::Custom(future) => future.map(|_| Shutdown).into_stream().boxed(),
-            ShutdownKind::CtrlC => async {
-                tokio::signal::ctrl_c()
+            ShutdownKind::Signal => async {
+                get_shutdown_signal()
                     .await
                     .expect("Failed to install CTRL+C signal handler");
             }
             .map(|_| Shutdown)
             .into_stream()
             .boxed(),
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn get_shutdown_signal() -> std::io::Result<()> {
+    let ctrl_c = tokio::signal::ctrl_c();
+    let mut terminate_signal =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
+    let terminate_fut = terminate_signal.recv();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            Ok(())
+        }
+        _ = terminate_fut => {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn get_shutdown_signal() -> std::io::Result<()> {
+    let ctrl_c = tokio::signal::ctrl_c();
+    let ctrl_break = tokio::signal::windows::ctrl_break()?.recv();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            Ok(())
+        }
+        _ = ctrl_break => {
+            Ok(())
         }
     }
 }
@@ -313,7 +346,7 @@ impl ShutdownKind {
 ///     let server = FederatedServer::builder()
 ///             .configuration(configuration)
 ///             .schema(schema)
-///             .shutdown(ShutdownKind::CtrlC)
+///             .shutdown(ShutdownKind::Signal)
 ///             .build();
 ///     server.serve().await;
 /// };
@@ -332,7 +365,7 @@ impl ShutdownKind {
 ///     let server = FederatedServer::builder()
 ///             .configuration(configuration)
 ///             .schema(schema)
-///             .shutdown(ShutdownKind::CtrlC)
+///             .shutdown(ShutdownKind::Signal)
 ///             .build();
 ///     let handle = server.serve();
 ///     handle.shutdown().await;

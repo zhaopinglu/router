@@ -169,7 +169,7 @@ async fn rt_main() -> Result<()> {
     let server = FederatedServer::builder()
         .configuration(configuration)
         .schema(schema)
-        .shutdown(ShutdownKind::CtrlC)
+        .shutdown(ShutdownKind::Signal)
         .build();
     let mut server_handle = server.serve();
     server_handle
