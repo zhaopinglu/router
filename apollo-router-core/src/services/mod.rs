@@ -7,6 +7,7 @@ use moka::sync::Cache;
 use serde::{Deserialize, Serialize};
 use static_assertions::assert_impl_all;
 use std::convert::Infallible;
+use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 use tower::layer::util::Stack;
@@ -134,6 +135,11 @@ pub trait ServiceBuilderExt<L> {
     ) -> ServiceBuilder<Stack<CachingLayer<S, Request, Key, Value, KeyFn, ValueFn, ResponseFn>, L>>
     where
         Request: Send,
+        Key: Send + Sync + Eq + Hash + Clone + 'static,
+        Value: Send + Sync + Clone + 'static,
+        KeyFn: Fn(&Request) -> Key + Clone + Send + 'static,
+        ValueFn: Fn(&S::Response) -> Value + Clone + Send + 'static,
+        ResponseFn: Fn(Request, Value) -> S::Response + Clone + Send + 'static,
         S: Service<Request> + Send,
         <S as Service<Request>>::Error: Send + Sync + Clone,
         <S as Service<Request>>::Response: Send,
@@ -156,6 +162,11 @@ impl<L> ServiceBuilderExt<L> for ServiceBuilder<L> {
         <S as Service<Request>>::Error: Send + Sync + Clone,
         <S as Service<Request>>::Response: Send,
         <S as Service<Request>>::Future: Send,
+        Key: Send + Sync + Eq + Hash + Clone + 'static,
+        Value: Send + Sync + Clone + 'static,
+        KeyFn: Fn(&Request) -> Key + Clone + Send + 'static,
+        ValueFn: Fn(&S::Response) -> Value + Clone + Send + 'static,
+        ResponseFn: Fn(Request, Value) -> S::Response + Clone + Send + 'static,
     {
         self.layer(CachingLayer::new(cache, key_fn, value_fn, response_fn))
     }

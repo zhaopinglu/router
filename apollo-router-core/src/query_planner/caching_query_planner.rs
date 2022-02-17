@@ -42,7 +42,7 @@ impl<T: QueryPlanner + 'static> CachingQueryPlanner<T> {
 impl<T: QueryPlanner> CacheResolver<QueryKey, Arc<QueryPlan>> for CachingQueryPlannerResolver<T> {
     async fn retrieve(&self, key: QueryKey) -> Result<Arc<QueryPlan>, CacheResolverError> {
         self.delegate
-            .get(key.0, key.1, key.2)
+            .get(key.query, key.operation_name, key.query_plan_options)
             .await
             .map_err(|err| err.into())
     }
@@ -53,10 +53,14 @@ impl<T: QueryPlanner> QueryPlanner for CachingQueryPlanner<T> {
     async fn get(
         &self,
         query: String,
-        operation: Option<String>,
-        options: QueryPlanOptions,
+        operation_name: Option<String>,
+        query_plan_options: QueryPlanOptions,
     ) -> PlanResult {
-        let key = (query, operation, options);
+        let key = QueryKey {
+            query,
+            operation_name,
+            query_plan_options,
+        };
         self.cm.get(key).await.map_err(|err| err.into())
     }
 }
@@ -80,17 +84,11 @@ where
 
     fn call(&mut self, request: QueryPlannerRequest) -> Self::Future {
         let body = request.context.request.body();
+        let query_key = (&request).into();
 
-        let key = (
-            body.query
-                .clone()
-                .expect("presence of a query has been checked by the RouterService before; qed"),
-            body.operation_name.to_owned(),
-            QueryPlanOptions::default(),
-        );
         let cm = self.cm.clone();
         Box::pin(async move {
-            cm.get(key)
+            cm.get(query_key)
                 .await
                 .map_err(|err| err.into())
                 .map(|query_plan| QueryPlannerResponse {

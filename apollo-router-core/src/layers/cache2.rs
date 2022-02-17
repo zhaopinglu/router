@@ -5,19 +5,6 @@ use std::marker::PhantomData;
 use std::task::Poll;
 use tower::{Layer, Service};
 
-// KeyFn is a function that allows to create a (Hashable) key from a service parameter.
-// for example: |req: RouterRequest| req.context.request.body().query.clone()
-//
-// ResponseFn is a function that allows to create a response from a stored cache value and a request
-// for example:
-// get the first word and parse it into something
-// |req: RouterRequest, cached_value: serde_json::Value| {
-//   RouterResponse { body: ResponseBody::RawJSON(cached_value), context: req.context }
-//   }
-//
-// ValueFn is a function that allows you to create a cache value to store, from a delegate service response
-// for example if the delegate service returns a String and you want to store serde_json::Value:
-// |cached_value: String|: serde_json::Value serde_json::to_value(&r).unwrap()
 pub struct CachingService<S, Request, Key, Value, KeyFn, ValueFn, ResponseFn>
 where
     Request: Send,
@@ -91,12 +78,7 @@ pub struct CachingLayer<S, Request, Key, Value, KeyFn, ValueFn, ResponseFn>
 where
     Request: Send,
     S: Service<Request> + Send,
-    Key: Send + Sync + Eq + Hash + Clone + 'static,
-    Value: Send + Sync + Clone + 'static,
-    KeyFn: Fn(&Request) -> Key + Clone + Send + 'static,
-    ValueFn: Fn(&S::Response) -> Value + Clone + Send + 'static,
-    ResponseFn: Fn(Request, Value) -> S::Response + Clone + Send + 'static,
-    <S as Service<Request>>::Error: Clone + Send + Sync + 'static,
+    <S as Service<Request>>::Error: Send + Sync + 'static,
     <S as Service<Request>>::Response: Send + 'static,
     <S as Service<Request>>::Future: Send + 'static,
 {
@@ -114,12 +96,7 @@ impl<S, Request, Key, Value, KeyFn, ValueFn, ResponseFn>
 where
     Request: Send,
     S: Service<Request> + Send,
-    Key: Send + Sync + Eq + Hash + Clone + 'static,
-    Value: Send + Sync + Clone + 'static,
-    KeyFn: Fn(&Request) -> Key + Clone + Send + 'static,
-    ValueFn: Fn(&S::Response) -> Value + Clone + Send + 'static,
-    ResponseFn: Fn(Request, Value) -> S::Response + Clone + Send + 'static,
-    <S as Service<Request>>::Error: Clone + Send + Sync + 'static,
+    <S as Service<Request>>::Error: Send + Sync + 'static,
     <S as Service<Request>>::Response: Send + 'static,
     <S as Service<Request>>::Future: Send + 'static,
 {

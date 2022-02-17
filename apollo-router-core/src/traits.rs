@@ -16,7 +16,30 @@ pub trait CacheResolver<K, V> {
 ///
 /// This type consists of a query string, an optional operation string and the
 /// [`QueryPlanOptions`].
-pub(crate) type QueryKey = (String, Option<String>, QueryPlanOptions);
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub(crate) struct QueryKey {
+    pub query: String,
+    pub operation_name: Option<String>,
+    pub query_plan_options: QueryPlanOptions,
+}
+
+impl From<&QueryPlannerRequest> for QueryKey {
+    fn from(qpr: &QueryPlannerRequest) -> Self {
+        let crate::Request {
+            query,
+            operation_name,
+            ..
+        } = qpr.context.request.body();
+        let query = query
+            .clone()
+            .expect("query presence has been checked in RouterService; qed");
+        Self {
+            query,
+            operation_name: operation_name.clone(),
+            query_plan_options: QueryPlanOptions::default(),
+        }
+    }
+}
 
 /// QueryPlanner can be used to plan queries.
 ///

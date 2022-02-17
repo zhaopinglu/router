@@ -1,13 +1,15 @@
 use crate::apq::APQ;
 use crate::forbid_http_get_mutations::ForbidHttpGetMutations;
+use crate::layers::cache::CachingLayer;
 use crate::services::execution_service::ExecutionService;
 use crate::{
-    plugin_utils, CachingQueryPlanner, DynPlugin, ExecutionRequest, ExecutionResponse,
-    NaiveIntrospection, Plugin, QueryCache, QueryPlannerRequest, QueryPlannerResponse,
-    ResponseBody, RouterBridgeQueryPlanner, RouterRequest, RouterResponse, Schema, SubgraphRequest,
+    plugin_utils, DynPlugin, ExecutionRequest, ExecutionResponse, NaiveIntrospection, Plugin,
+    QueryCache, QueryKey, QueryPlan, QueryPlannerRequest, QueryPlannerResponse, ResponseBody,
+    RouterBridgeQueryPlanner, RouterRequest, RouterResponse, Schema, SubgraphRequest,
     SubgraphResponse,
 };
 use futures::future::BoxFuture;
+use moka::sync::CacheBuilder;
 use std::sync::Arc;
 use std::task::Poll;
 use tower::buffer::Buffer;
@@ -229,18 +231,25 @@ impl PluggableRouterServiceBuilder {
             .and_then(|x| x.parse().ok())
             .unwrap_or(100);
 
+        let query_planner = RouterBridgeQueryPlanner::new(self.schema.clone());
+
+        let cache = CacheBuilder::new(plan_cache_limit).build();
         //QueryPlannerService takes an UnplannedRequest and outputs PlannedRequest
         let (query_planner_service, query_worker) = Buffer::pair(
-            ServiceBuilder::new().service(
-                self.plugins.iter_mut().fold(
-                    CachingQueryPlanner::new(
-                        RouterBridgeQueryPlanner::new(self.schema.clone()),
-                        plan_cache_limit,
-                    )
-                    .boxed(),
+            ServiceBuilder::new()
+                .layer(CachingLayer::new(
+                    cache,
+                    |req: &QueryPlannerRequest| QueryKey::from(req),
+                    |res: &QueryPlannerResponse| res.query_plan.clone(),
+                    |req: QueryPlannerRequest, query_plan: Arc<QueryPlan>| QueryPlannerResponse {
+                        query_plan: query_plan.clone(),
+                        context: req.context,
+                    },
+                ))
+                .service(self.plugins.iter_mut().fold(
+                    RouterBridgeQueryPlanner::new(self.schema.clone()).boxed(),
                     |acc, e| e.query_planning_service(acc),
-                ),
-            ),
+                )),
             self.buffer,
         );
         tokio::spawn(query_worker.with_subscriber(self.dispatcher.clone()));
