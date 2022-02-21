@@ -3,5 +3,9 @@ server:
     origins:
       - "https://studio.apollographql.com/"
 plugins:
-  apollographql.com_mock-subgraph:
+  apollographql.mock-subgraph:
     path: "supergraph.graphql"
+    # removing this key would apply the plugin
+    # to every services
+    services:
+      - accounts

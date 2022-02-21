@@ -1644,12 +1644,14 @@ name = "mock-subgraphs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "apollo-parser 0.2.3",
  "apollo-router",
  "apollo-router-core",
  "futures",
  "schemars",
  "serde",
  "serde_json",
+ "serde_json_bytes",
  "tokio",
  "tokio-util 0.7.0 (git+https://github.com/tokio-rs/tokio.git?rev=91b9850)",
  "tower",

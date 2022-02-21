@@ -59,7 +59,7 @@ impl Fragments {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Fragment {
+pub struct Fragment {
     pub(crate) type_condition: String,
     pub(crate) selection_set: Vec<Selection>,
 }

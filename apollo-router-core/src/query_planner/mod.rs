@@ -6,7 +6,7 @@ pub use caching_query_planner::*;
 use fetch::OperationKind;
 use futures::prelude::*;
 pub use router_bridge_query_planner::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tracing::Instrument;
 /// Query planning options.
@@ -29,7 +29,7 @@ impl Default for QueryPlan {
 }
 
 /// Query plans are composed of a set of nodes.
-#[derive(Debug, PartialEq, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase", tag = "kind")]
 pub(crate) enum PlanNode {
     /// These nodes must be executed in order.
@@ -97,6 +97,10 @@ impl QueryPlan {
 
     pub fn contains_mutations(&self) -> bool {
         self.root.contains_mutations()
+    }
+
+    pub fn to_value(&self) -> Result<Value, serde_json::Error> {
+        serde_json_bytes::to_value(&self.root)
     }
 }
 
@@ -238,20 +242,20 @@ impl PlanNode {
 pub(crate) mod fetch {
     use super::selection::{select_object, Selection};
     use crate::prelude::graphql::*;
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
     use std::sync::Arc;
     use tower::ServiceExt;
     use tracing::{instrument, Instrument};
 
     /// A fetch node.
-    #[derive(Debug, PartialEq, Deserialize)]
+    #[derive(Debug, PartialEq, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub(crate) struct FetchNode {
         /// The name of the service or subgraph that the fetch is querying.
         service_name: String,
 
         /// The data that is required for the subgraph fetch.
-        #[serde(skip_serializing_if = "Vec::is_empty")]
+        #[serde(skip)]
         #[serde(default)]
         requires: Vec<Selection>,
 
@@ -265,7 +269,7 @@ pub(crate) mod fetch {
         operation_kind: OperationKind,
     }
 
-    #[derive(Copy, Clone, Debug, PartialEq, Deserialize)]
+    #[derive(Copy, Clone, Debug, PartialEq, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub enum OperationKind {
         Query,
@@ -454,7 +458,7 @@ pub(crate) mod fetch {
 }
 
 /// A flatten node.
-#[derive(Debug, PartialEq, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FlattenNode {
     /// The path when result should be merged.

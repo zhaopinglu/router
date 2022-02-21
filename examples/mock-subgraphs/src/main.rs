@@ -6,7 +6,7 @@ use apollo_router::{ConfigurationKind, SchemaKind, ShutdownKind, State};
 use futures::prelude::*;
 use tracing_subscriber::EnvFilter;
 
-mod mock_subgraph_layer;
+mod mock_subgraph_plugin;
 
 #[tokio::main]
 async fn main() -> Result<()> {

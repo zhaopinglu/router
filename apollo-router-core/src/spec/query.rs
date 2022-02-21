@@ -1,6 +1,7 @@
 use crate::prelude::graphql::*;
 use apollo_parser::ast;
 use derivative::Derivative;
+use serde_json_bytes::ByteString;
 use std::collections::{HashMap, HashSet};
 use tracing::level_filters::LevelFilter;
 
@@ -279,6 +280,57 @@ impl Query {
             Ok(())
         } else {
             Err(Response::builder().errors(errors).build())
+        }
+    }
+
+    pub fn generate_response(&self, schema: &Schema) -> serde_json_bytes::Value {
+        let mut output = Default::default();
+        for operation in self.operations.iter() {
+            self.do_stuff(&operation.selection_set, &mut output, schema)
+        }
+
+        output.into()
+    }
+
+    fn do_stuff(&self, selection_set: &[Selection], output: &mut Object, schema: &Schema) {
+        for selection in selection_set {
+            match selection {
+                Selection::Field {
+                    name,
+                    selection_set,
+                } => {
+                    let field_name: ByteString = name.to_string().into();
+                    let input_value = Value::Null;
+                    if let Some(selection_set) = selection_set {
+                        // todo: Array or Object ?
+                        let mut output_object = Object::default();
+                        self.do_stuff(selection_set, &mut output_object, schema);
+                        output.insert(field_name, output_object.into());
+                    } else {
+                        output.insert(field_name, "THIS IS MOCK DATA".into());
+                    }
+                }
+                Selection::InlineFragment {
+                    fragment:
+                        Fragment {
+                            type_condition,
+                            selection_set,
+                        },
+                } => {
+                    self.do_stuff(selection_set, output, schema);
+                }
+                Selection::FragmentSpread { name } => {
+                    if let Some(fragment) = self
+                        .fragments
+                        .get(name)
+                        .or_else(|| schema.fragments.get(name))
+                    {
+                        self.do_stuff(&fragment.selection_set, output, schema);
+                    } else {
+                        panic!("Missing fragment named: {}", name);
+                    }
+                }
+            }
         }
     }
 }
