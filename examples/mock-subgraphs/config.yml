@@ -9,3 +9,4 @@ plugins:
     # to every service
     services:
       - accounts
+      - products

@@ -286,28 +286,129 @@ impl Query {
     pub fn generate_response(&self, schema: &Schema) -> serde_json_bytes::Value {
         let mut output = Default::default();
         for operation in self.operations.iter() {
-            self.do_stuff(&operation.selection_set, &mut output, schema)
+            self.do_stuff(
+                &operation.selection_set,
+                &mut output,
+                schema,
+                &FieldOrObjectType::Object(
+                    schema
+                        .object_types
+                        .get("Query")
+                        .expect("this cannot happen on an already validated query; qed"),
+                ),
+            )
         }
 
         output.into()
     }
 
-    fn do_stuff(&self, selection_set: &[Selection], output: &mut Object, schema: &Schema) {
-        for selection in selection_set {
+    fn do_stuff(
+        &self,
+        parent_selection_set: &[Selection],
+        output: &mut Object,
+        schema: &Schema,
+        field_or_object_type: &FieldOrObjectType,
+    ) {
+        for selection in parent_selection_set {
             match selection {
                 Selection::Field {
                     name,
                     selection_set,
                 } => {
-                    let field_name: ByteString = name.to_string().into();
-                    if let Some(selection_set) = selection_set {
-                        // todo: Array or Object ?
-                        let mut output_object = Object::default();
-                        self.do_stuff(selection_set, &mut output_object, schema);
-                        output.insert(field_name, output_object.into());
-                    } else {
-                        output.insert(field_name, "THIS IS MOCK DATA".into());
-                    }
+                    let field_name = name.to_string();
+
+                    match &field_or_object_type {
+                        FieldOrObjectType::Field(FieldType::Boolean) => {
+                            output.insert(ByteString::from(field_name), true.into());
+                        }
+                        FieldOrObjectType::Field(FieldType::String) => {
+                            output.insert(ByteString::from(field_name), "MOCK DATA".into());
+                        }
+                        FieldOrObjectType::Field(FieldType::Int) => {
+                            output.insert(ByteString::from(field_name), 42usize.into());
+                        }
+                        FieldOrObjectType::Field(FieldType::Float) => {
+                            output.insert(ByteString::from(field_name), 42.0f32.into());
+                        }
+                        FieldOrObjectType::Field(FieldType::Id) => {
+                            output.insert(ByteString::from(field_name), "ID-MOCK-DATA".into());
+                        }
+                        FieldOrObjectType::Field(FieldType::Named(type_name)) => {
+                            let child_type =
+                                schema.object_types.get(type_name.as_str()).clone().expect(
+                                    "this cannot happen on an already validated query; qed",
+                                );
+                            let mut output_object = Object::default();
+                            for (name, field_type) in
+                                child_type.fields.iter().filter(|(name, field_type)| {
+                                    parent_selection_set.iter().any(|selection_set| {
+                                        match selection_set {
+                                            Selection::Field {
+                                                name: field_name, ..
+                                            } => &field_name == name,
+                                            Selection::FragmentSpread { name: spread_name } => {
+                                                &spread_name == name
+                                            }
+                                            _ => false,
+                                        }
+                                    })
+                                })
+                            {
+                                self.do_stuff(
+                                    &parent_selection_set.to_vec(),
+                                    &mut output_object,
+                                    schema,
+                                    &FieldOrObjectType::Field(field_type),
+                                );
+                            }
+                            output.insert(ByteString::from(field_name), output_object.into());
+                        }
+                        FieldOrObjectType::Field(FieldType::NonNull(non_null_type)) => {
+                            output
+                                .insert(ByteString::from(field_name), "MOCK NON NULL STUFF".into());
+                        }
+                        FieldOrObjectType::Object(object_type) => {
+                            dbg!(field_name.as_str());
+                            dbg!(object_type);
+                            dbg!(&selection_set);
+                            let field_type = object_type
+                                .fields
+                                .get(field_name.as_str())
+                                .expect("this cannot happen on an already validated query; qed");
+
+                            dbg!(&field_type);
+
+                            let mut output_object = Object::default();
+                            self.do_stuff(
+                                selection_set
+                                    .as_ref()
+                                    .expect("object_types require selection sets; qed"),
+                                &mut output_object,
+                                schema,
+                                &FieldOrObjectType::Field(field_type),
+                            );
+                            output.insert(ByteString::from(field_name), output_object.into());
+                        }
+                        FieldOrObjectType::Field(FieldType::List(list_content)) => {
+                            let len = 5; // TODO: Grab from variables or generate randomly
+                            dbg!(&list_content);
+                            dbg!(&parent_selection_set);
+                            let output_vec = (0usize..len)
+                                .map(|_| {
+                                    // list selections take the parent's set
+                                    let mut object = Object::default();
+                                    self.do_stuff(
+                                        &parent_selection_set.to_vec(),
+                                        &mut object,
+                                        schema,
+                                        &FieldOrObjectType::Field(list_content),
+                                    );
+                                    Value::Object(object)
+                                })
+                                .collect::<Vec<Value>>();
+                            output.insert(ByteString::from(field_name), Value::Array(output_vec));
+                        }
+                    };
                 }
                 Selection::InlineFragment {
                     fragment:
@@ -316,7 +417,7 @@ impl Query {
                             selection_set,
                         },
                 } => {
-                    self.do_stuff(selection_set, output, schema);
+                    self.do_stuff(selection_set, output, schema, field_or_object_type);
                 }
                 Selection::FragmentSpread { name } => {
                     if let Some(fragment) = self
@@ -324,7 +425,12 @@ impl Query {
                         .get(name)
                         .or_else(|| schema.fragments.get(name))
                     {
-                        self.do_stuff(&fragment.selection_set, output, schema);
+                        self.do_stuff(
+                            &fragment.selection_set,
+                            output,
+                            schema,
+                            &field_or_object_type,
+                        );
                     } else {
                         panic!("Missing fragment named: {}", name);
                     }
@@ -332,6 +438,12 @@ impl Query {
             }
         }
     }
+}
+
+#[derive(Debug)]
+enum FieldOrObjectType<'f> {
+    Field(&'f FieldType),
+    Object(&'f ObjectType),
 }
 
 #[derive(Debug)]
