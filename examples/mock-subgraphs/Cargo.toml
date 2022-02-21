@@ -17,6 +17,10 @@ tokio-util = { git = "https://github.com/tokio-rs/tokio.git", rev = "91b9850", f
     "codec",
 ] }
 tracing-subscriber = "0.3.9"
+tower = "0.4.12"
+serde_json = "1.0.79"
+serde = "1.0.136"
+schemars = "0.8.8"
 
 [patch.crates-io]
 opentelemetry = { git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "6b3aa02aa" }

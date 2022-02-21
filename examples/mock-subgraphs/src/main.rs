@@ -11,7 +11,7 @@ mod mock_subgraph_layer;
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = tracing_subscriber::fmt::fmt()
-        .with_env_filter(EnvFilter::try_new("trace").expect("could not parse log"))
+        .with_env_filter(EnvFilter::try_new("info").expect("could not parse log"))
         .init();
 
     let current_directory = std::env::current_dir()?;

@@ -73,7 +73,7 @@ pub trait ConfigurableLayer: Send + Sync + 'static + Sized {
 #[macro_export]
 macro_rules! register_layer {
     ($group: literal, $name: literal, $value: ident) => {
-        startup::on_startup! {
+        $crate::reexports::startup::on_startup! {
             let qualified_name = if $group == "" {
                 $name.to_string()
             }
@@ -82,7 +82,7 @@ macro_rules! register_layer {
             };
 
             $crate::register_layer(qualified_name, $crate::LayerFactory::new(|configuration| {
-                let layer = $value::new(serde_json::from_value(configuration.clone())?)?;
+                let layer = <$value as ConfigurableLayer>::new($crate::reexports::serde_json::from_value(configuration.clone())?)?;
                 Ok(tower::util::BoxLayer::new(layer))
             }, |gen| gen.subschema_for::<<$value as $crate::ConfigurableLayer>::Config>()));
         }
