@@ -5,17 +5,52 @@ use apollo_router_core::Plugin;
 use apollo_router_core::Schema;
 use apollo_router_core::SubgraphRequest;
 use apollo_router_core::SubgraphResponse;
+use futures::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::task::Poll;
 use tower::util::BoxService;
 use tower::BoxError;
+use tower::Service;
 use tower::ServiceExt;
 
+#[derive(Clone)]
 struct MockSubgraph {
     schema: Arc<Schema>,
     services: Vec<String>,
+}
+
+impl Service<SubgraphRequest> for MockSubgraph {
+    type Response = SubgraphResponse;
+
+    type Error = BoxError;
+
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: SubgraphRequest) -> Self::Future {
+        let apollo_router_core::Request {
+            query, variables, ..
+        } = req.http_request.body();
+
+        let as_graphql = apollo_router_core::Query::parse(query.clone().unwrap())
+            .expect("hope we checked it before tbh");
+
+        let data = as_graphql.generate_response(&self.schema);
+
+        Box::pin(async {
+            Ok(plugin_utils::SubgraphResponse::builder()
+                .data(data)
+                .context(req.context)
+                .build()
+                .into())
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -42,31 +77,8 @@ impl Plugin for MockSubgraph {
         name: &str,
         service: BoxService<SubgraphRequest, SubgraphResponse, BoxError>,
     ) -> BoxService<SubgraphRequest, SubgraphResponse, BoxError> {
-        let mut mock_service = plugin_utils::MockSubgraphService::new();
-        let schema_clone = Arc::clone(&self.schema);
-        mock_service
-            .expect_call()
-            .returning(move |req: SubgraphRequest| {
-                let apollo_router_core::Request {
-                    query, variables, ..
-                } = req.http_request.body();
-
-                let as_graphql = apollo_router_core::Query::parse(query.clone().unwrap())
-                    .expect("hope we checked it before tbh");
-
-                let data = as_graphql.generate_response(&schema_clone);
-
-                Ok(plugin_utils::SubgraphResponse::builder()
-                    .data(data)
-                    .context(req.context)
-                    .build()
-                    .into())
-            });
-
-        let mock = mock_service.build();
-
         if self.services.is_empty() || self.services.contains(&name.to_string()) {
-            mock.boxed()
+            self.clone().boxed()
         } else {
             service
         }

@@ -300,7 +300,6 @@ impl Query {
                     selection_set,
                 } => {
                     let field_name: ByteString = name.to_string().into();
-                    let input_value = Value::Null;
                     if let Some(selection_set) = selection_set {
                         // todo: Array or Object ?
                         let mut output_object = Object::default();

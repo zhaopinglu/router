@@ -6,6 +6,6 @@ plugins:
   apollographql.mock-subgraph:
     path: "supergraph.graphql"
     # removing this key would apply the plugin
-    # to every services
+    # to every service
     services:
       - accounts
