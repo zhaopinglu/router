@@ -8,6 +8,7 @@ members = [
     "uplink",
     "xtask",
 ]
+exclude = ["examples/mock-subgraphs"]
 
 [patch.crates-io]
 opentelemetry = { git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "6b3aa02aa" }

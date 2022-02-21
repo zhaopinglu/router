@@ -1,0 +1,4 @@
+server:
+  cors:
+    origins:
+      - "https://studio.apollographql.com/"

@@ -12,7 +12,7 @@ crates/*/Cargo.lock
 
 
 # Added by cargo
-/target
+**/target
 
 # IDE
 .idea

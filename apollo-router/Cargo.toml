@@ -53,7 +53,7 @@ prost-types = "0.9.0"
 reqwest = { version = "0.11.9", features = ["json", "stream"] }
 reqwest-middleware = "0.1.4"
 reqwest-tracing = { version = "0.2", features = ["opentelemetry_0_16"] }
-schemars = { version="0.8.8", features = ["url"] }
+schemars = { version = "0.8.8", features = ["url"] }
 serde = { version = "1.0.136", features = ["derive", "rc"] }
 serde_json = "1.0.79"
 serde_yaml = "0.8.23"
@@ -64,10 +64,13 @@ task-local-extensions = "0.1.1"
 thiserror = "1.0.30"
 tokio = { version = "1.16.1", features = ["full"] }
 # TODO wait for tokio-util > 0.6.9 to release
-tokio-util = { git = "https://github.com/tokio-rs/tokio.git", rev = "91b9850", features = ["net", "codec"] }
+tokio-util = { git = "https://github.com/tokio-rs/tokio.git", rev = "91b9850", features = [
+    "net",
+    "codec",
+] }
 # don't bump it to 0.6 until opentelemetry-otlp does
 tonic = { version = "0.5.2", optional = true }
-tower = { version="0.4.12", features = ["util"] }
+tower = { version = "0.4.12", features = ["util"] }
 tower-http = { version = "0.2.3", features = ["trace"] }
 tower-service = "0.3.1"
 tracing = "0.1.31"

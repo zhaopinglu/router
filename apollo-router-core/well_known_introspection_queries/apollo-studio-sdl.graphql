@@ -1,0 +1,1 @@
+query IntrospectionQuery {        _service {            sdl        }    }
