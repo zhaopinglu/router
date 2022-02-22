@@ -26,17 +26,14 @@ impl SubgraphResponse {
         crate::SubgraphResponse {
             response: Response::builder()
                 .status(status)
-                .body(
-                    crate::Response {
-                        label: self.label,
-                        data: self.data,
-                        path: self.path,
-                        has_next: self.has_next,
-                        errors: self.errors,
-                        extensions: self.extensions.unwrap_or_default(),
-                    }
-                    .into(),
-                )
+                .body(crate::Response {
+                    label: self.label,
+                    data: self.data,
+                    path: self.path,
+                    has_next: self.has_next,
+                    errors: self.errors,
+                    extensions: self.extensions.unwrap_or_default(),
+                })
                 .expect("crate::Response implements Serialize; qed")
                 .into(),
             context: self

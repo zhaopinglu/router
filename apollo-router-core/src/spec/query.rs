@@ -298,8 +298,7 @@ impl Query {
                 Path::empty(),
             )
         }
-
-        output.into()
+        output
     }
 
     fn generate_sub_response(
@@ -336,7 +335,6 @@ impl Query {
             let child_type = schema
                 .object_types
                 .get(type_name.as_str())
-                .clone()
                 .expect("this cannot happen on an already validated query; qed");
 
             let mut sub_value = Default::default();
@@ -392,10 +390,10 @@ impl Query {
                         FieldOrObjectType::Field(FieldType::Float) => 42.0f32.into(),
                         FieldOrObjectType::Field(FieldType::Id) => "ID-MOCK-DATA".into(),
                         FieldOrObjectType::Field(FieldType::Named(type_name)) => {
-                            let child_type =
-                                schema.object_types.get(type_name.as_str()).clone().expect(
-                                    "this cannot happen on an already validated query; qed",
-                                );
+                            let child_type = schema
+                                .object_types
+                                .get(type_name.as_str())
+                                .expect("this cannot happen on an already validated query; qed");
                             let mut sub_value = Default::default();
                             for (selection_set, field_type) in
                                 child_type.fields.iter().filter_map(|(name, field_type)| {
