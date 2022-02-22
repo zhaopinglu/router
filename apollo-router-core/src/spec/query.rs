@@ -294,8 +294,9 @@ impl Query {
                     schema
                         .object_types
                         .get("Query")
-                        .expect("this cannot happen on an already validated query; qed"),
+                        .expect("schema must contain queries; qed"),
                 ),
+                Path::empty(),
             )
         }
 
@@ -305,110 +306,162 @@ impl Query {
     fn do_stuff(
         &self,
         parent_selection_set: &[Selection],
-        output: &mut Object,
+        output: &mut serde_json_bytes::Value,
         schema: &Schema,
         field_or_object_type: &FieldOrObjectType,
+        parent_path: Path,
     ) {
+        if let FieldOrObjectType::Field(FieldType::List(list_content)) = field_or_object_type {
+            let len = 5; // TODO: Grab from variables or generate randomly
+            let values = (0usize..len)
+                .map(|_| {
+                    // list selections take the parent's set
+                    let mut object: serde_json_bytes::Value = Default::default();
+                    self.do_stuff(
+                        &parent_selection_set.to_vec(),
+                        &mut object,
+                        schema,
+                        &FieldOrObjectType::Field(list_content),
+                        parent_path.clone(),
+                    );
+                    serde_json_bytes::to_value(&object).unwrap()
+                })
+                .collect();
+            let value_with_path = Value::from_path(&parent_path, values);
+
+            output.deep_merge(value_with_path);
+            return;
+        }
+
+        if let FieldOrObjectType::Field(FieldType::Named(type_name)) = field_or_object_type {
+            let child_type = schema
+                .object_types
+                .get(type_name.as_str())
+                .clone()
+                .expect("this cannot happen on an already validated query; qed");
+
+            let mut sub_value = Default::default();
+            for (selection_set, field_type) in
+                child_type.fields.iter().filter_map(|(name, field_type)| {
+                    let selection_set = parent_selection_set
+                        .iter()
+                        .filter(|selection| match selection {
+                            Selection::Field {
+                                name: field_name, ..
+                            } => field_name == name,
+                            Selection::FragmentSpread { name: spread_name } => spread_name == name,
+                            _ => false,
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if selection_set.is_empty() {
+                        None
+                    } else {
+                        Some((selection_set, field_type))
+                    }
+                })
+            {
+                self.do_stuff(
+                    selection_set.as_slice(),
+                    &mut sub_value,
+                    schema,
+                    &FieldOrObjectType::Field(field_type),
+                    parent_path.clone(),
+                );
+            }
+            let value_with_path = Value::from_path(&parent_path, sub_value);
+            output.deep_merge(value_with_path);
+
+            return;
+        }
+
         for selection in parent_selection_set {
             match selection {
                 Selection::Field {
                     name,
                     selection_set,
                 } => {
-                    let field_name = name.to_string();
+                    let path = parent_path.join(Path::from_slice(&[name]));
 
-                    match &field_or_object_type {
+                    let sub_value = match &field_or_object_type {
                         FieldOrObjectType::Field(FieldType::Boolean) => {
-                            output.insert(ByteString::from(field_name), true.into());
+                            Value::from_path(&path, true.into())
                         }
                         FieldOrObjectType::Field(FieldType::String) => {
-                            output.insert(ByteString::from(field_name), "MOCK DATA".into());
+                            Value::from_path(&path, "MOCK DATA".into())
                         }
                         FieldOrObjectType::Field(FieldType::Int) => {
-                            output.insert(ByteString::from(field_name), 42usize.into());
+                            Value::from_path(&path, 42usize.into())
                         }
                         FieldOrObjectType::Field(FieldType::Float) => {
-                            output.insert(ByteString::from(field_name), 42.0f32.into());
+                            Value::from_path(&path, 42.0f32.into())
                         }
                         FieldOrObjectType::Field(FieldType::Id) => {
-                            output.insert(ByteString::from(field_name), "ID-MOCK-DATA".into());
+                            Value::from_path(&path, "ID-MOCK-DATA".into())
                         }
                         FieldOrObjectType::Field(FieldType::Named(type_name)) => {
                             let child_type =
                                 schema.object_types.get(type_name.as_str()).clone().expect(
                                     "this cannot happen on an already validated query; qed",
                                 );
-                            let mut output_object = Object::default();
-                            for (name, field_type) in
-                                child_type.fields.iter().filter(|(name, field_type)| {
-                                    parent_selection_set.iter().any(|selection_set| {
-                                        match selection_set {
+                            let mut sub_value = Default::default();
+                            for (selection_set, field_type) in
+                                child_type.fields.iter().filter_map(|(name, field_type)| {
+                                    let selection_set = parent_selection_set
+                                        .iter()
+                                        .filter(|selection| match selection {
                                             Selection::Field {
                                                 name: field_name, ..
-                                            } => &field_name == name,
+                                            } => field_name == name,
                                             Selection::FragmentSpread { name: spread_name } => {
-                                                &spread_name == name
+                                                spread_name == name
                                             }
                                             _ => false,
-                                        }
-                                    })
+                                        })
+                                        .cloned()
+                                        .collect::<Vec<_>>();
+                                    if selection_set.is_empty() {
+                                        None
+                                    } else {
+                                        Some((selection_set, field_type))
+                                    }
                                 })
                             {
                                 self.do_stuff(
-                                    &parent_selection_set.to_vec(),
-                                    &mut output_object,
+                                    selection_set.as_slice(),
+                                    &mut sub_value,
                                     schema,
                                     &FieldOrObjectType::Field(field_type),
+                                    path.clone(),
                                 );
                             }
-                            output.insert(ByteString::from(field_name), output_object.into());
+                            sub_value
                         }
                         FieldOrObjectType::Field(FieldType::NonNull(non_null_type)) => {
-                            output
-                                .insert(ByteString::from(field_name), "MOCK NON NULL STUFF".into());
+                            "MOCK NON NULL STUFF".into()
                         }
                         FieldOrObjectType::Object(object_type) => {
-                            dbg!(field_name.as_str());
-                            dbg!(object_type);
-                            dbg!(&selection_set);
                             let field_type = object_type
                                 .fields
-                                .get(field_name.as_str())
+                                .get(name.as_str())
                                 .expect("this cannot happen on an already validated query; qed");
 
-                            dbg!(&field_type);
-
-                            let mut output_object = Object::default();
+                            let mut sub_value = Default::default();
                             self.do_stuff(
                                 selection_set
                                     .as_ref()
                                     .expect("object_types require selection sets; qed"),
-                                &mut output_object,
+                                &mut sub_value,
                                 schema,
                                 &FieldOrObjectType::Field(field_type),
+                                parent_path.clone(),
                             );
-                            output.insert(ByteString::from(field_name), output_object.into());
+
+                            Value::from_path(&path, sub_value)
                         }
-                        FieldOrObjectType::Field(FieldType::List(list_content)) => {
-                            let len = 5; // TODO: Grab from variables or generate randomly
-                            dbg!(&list_content);
-                            dbg!(&parent_selection_set);
-                            let output_vec = (0usize..len)
-                                .map(|_| {
-                                    // list selections take the parent's set
-                                    let mut object = Object::default();
-                                    self.do_stuff(
-                                        &parent_selection_set.to_vec(),
-                                        &mut object,
-                                        schema,
-                                        &FieldOrObjectType::Field(list_content),
-                                    );
-                                    Value::Object(object)
-                                })
-                                .collect::<Vec<Value>>();
-                            output.insert(ByteString::from(field_name), Value::Array(output_vec));
-                        }
+                        _ => unreachable!("lists and objects have been dealt with already; qed"),
                     };
+                    output.deep_merge(sub_value);
                 }
                 Selection::InlineFragment {
                     fragment:
@@ -417,7 +470,13 @@ impl Query {
                             selection_set,
                         },
                 } => {
-                    self.do_stuff(selection_set, output, schema, field_or_object_type);
+                    self.do_stuff(
+                        selection_set,
+                        output,
+                        schema,
+                        field_or_object_type,
+                        parent_path.clone(),
+                    );
                 }
                 Selection::FragmentSpread { name } => {
                     if let Some(fragment) = self
@@ -430,6 +489,7 @@ impl Query {
                             output,
                             schema,
                             &field_or_object_type,
+                            parent_path.clone(),
                         );
                     } else {
                         panic!("Missing fragment named: {}", name);

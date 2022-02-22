@@ -46,6 +46,7 @@ impl Service<SubgraphRequest> for MockSubgraph {
 
         let data = as_graphql.generate_response(&self.schema);
 
+        dbg!(&data);
         Box::pin(async {
             Ok(plugin_utils::SubgraphResponse::builder()
                 .data(data)
