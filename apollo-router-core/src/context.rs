@@ -1,7 +1,8 @@
 use crate::prelude::graphql::*;
 use crate::services::http_compat;
-use std::sync::{Arc, LockResult};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use futures::Future;
+use std::sync::Arc;
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Clone, Debug)]
 pub struct Context<T = Arc<http_compat::Request<Request>>> {
@@ -43,11 +44,11 @@ impl From<Context<http_compat::Request<Request>>> for Context<Arc<http_compat::R
 }
 
 impl<T> Context<T> {
-    pub fn extensions(&self) -> LockResult<RwLockReadGuard<Object>> {
+    pub fn extensions(&self) -> impl Future<Output = RwLockReadGuard<Object>> {
         self.extensions.read()
     }
 
-    pub fn extensions_mut(&self) -> LockResult<RwLockWriteGuard<Object>> {
+    pub fn extensions_mut(&self) -> impl Future<Output = RwLockWriteGuard<Object>> {
         self.extensions.write()
     }
 }
