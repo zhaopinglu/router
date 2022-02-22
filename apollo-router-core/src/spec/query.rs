@@ -1,7 +1,6 @@
 use crate::prelude::graphql::*;
 use apollo_parser::ast;
 use derivative::Derivative;
-use serde_json_bytes::ByteString;
 use std::collections::{HashMap, HashSet};
 use tracing::level_filters::LevelFilter;
 
@@ -369,8 +368,8 @@ impl Query {
                     parent_path.clone(),
                 );
             }
-            let value_with_path = Value::from_path(&parent_path, sub_value);
-            output.deep_merge(value_with_path);
+            // let value_with_path = Value::from_path(&parent_path, sub_value);
+            output.deep_merge(sub_value);
 
             return;
         }
@@ -384,21 +383,11 @@ impl Query {
                     let path = parent_path.join(Path::from_slice(&[name]));
 
                     let sub_value = match &field_or_object_type {
-                        FieldOrObjectType::Field(FieldType::Boolean) => {
-                            Value::from_path(&path, true.into())
-                        }
-                        FieldOrObjectType::Field(FieldType::String) => {
-                            Value::from_path(&path, "MOCK DATA".into())
-                        }
-                        FieldOrObjectType::Field(FieldType::Int) => {
-                            Value::from_path(&path, 42usize.into())
-                        }
-                        FieldOrObjectType::Field(FieldType::Float) => {
-                            Value::from_path(&path, 42.0f32.into())
-                        }
-                        FieldOrObjectType::Field(FieldType::Id) => {
-                            Value::from_path(&path, "ID-MOCK-DATA".into())
-                        }
+                        FieldOrObjectType::Field(FieldType::Boolean) => true.into(),
+                        FieldOrObjectType::Field(FieldType::String) => "MOCK DATA".into(),
+                        FieldOrObjectType::Field(FieldType::Int) => 42usize.into(),
+                        FieldOrObjectType::Field(FieldType::Float) => 42.0f32.into(),
+                        FieldOrObjectType::Field(FieldType::Id) => "ID-MOCK-DATA".into(),
                         FieldOrObjectType::Field(FieldType::Named(type_name)) => {
                             let child_type =
                                 schema.object_types.get(type_name.as_str()).clone().expect(
@@ -432,7 +421,7 @@ impl Query {
                                     &mut sub_value,
                                     schema,
                                     &FieldOrObjectType::Field(field_type),
-                                    path.clone(),
+                                    parent_path.clone(),
                                 );
                             }
                             sub_value
@@ -457,11 +446,11 @@ impl Query {
                                 parent_path.clone(),
                             );
 
-                            Value::from_path(&path, sub_value)
+                            sub_value
                         }
                         _ => unreachable!("lists and objects have been dealt with already; qed"),
                     };
-                    output.deep_merge(sub_value);
+                    output.deep_merge(Value::from_path(&path, sub_value));
                 }
                 Selection::InlineFragment {
                     fragment:
