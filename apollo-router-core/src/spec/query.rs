@@ -285,7 +285,7 @@ impl Query {
     pub fn generate_response(&self, schema: &Schema) -> serde_json_bytes::Value {
         let mut output = Default::default();
         for operation in self.operations.iter() {
-            self.do_stuff(
+            self.generate_sub_response(
                 &operation.selection_set,
                 &mut output,
                 schema,
@@ -302,7 +302,7 @@ impl Query {
         output.into()
     }
 
-    fn do_stuff(
+    fn generate_sub_response(
         &self,
         parent_selection_set: &[Selection],
         output: &mut serde_json_bytes::Value,
@@ -316,7 +316,7 @@ impl Query {
                 .map(|_| {
                     // list selections take the parent's set
                     let mut object: serde_json_bytes::Value = Default::default();
-                    self.do_stuff(
+                    self.generate_sub_response(
                         &parent_selection_set.to_vec(),
                         &mut object,
                         schema,
@@ -360,7 +360,7 @@ impl Query {
                     }
                 })
             {
-                self.do_stuff(
+                self.generate_sub_response(
                     selection_set.as_slice(),
                     &mut sub_value,
                     schema,
@@ -368,7 +368,6 @@ impl Query {
                     parent_path.clone(),
                 );
             }
-            // let value_with_path = Value::from_path(&parent_path, sub_value);
             output.deep_merge(sub_value);
 
             return;
@@ -380,6 +379,10 @@ impl Query {
                     name,
                     selection_set,
                 } => {
+                    // TODO: relationships aren't supported yet
+                    if name.as_str() == "_entities" {
+                        continue;
+                    };
                     let path = parent_path.join(Path::from_slice(&[name]));
 
                     let sub_value = match &field_or_object_type {
@@ -416,7 +419,7 @@ impl Query {
                                     }
                                 })
                             {
-                                self.do_stuff(
+                                self.generate_sub_response(
                                     selection_set.as_slice(),
                                     &mut sub_value,
                                     schema,
@@ -427,7 +430,15 @@ impl Query {
                             sub_value
                         }
                         FieldOrObjectType::Field(FieldType::NonNull(non_null_type)) => {
-                            "MOCK NON NULL STUFF".into()
+                            let mut sub_value = Default::default();
+                            self.generate_sub_response(
+                                parent_selection_set,
+                                &mut sub_value,
+                                schema,
+                                &FieldOrObjectType::Field(non_null_type),
+                                parent_path.clone(),
+                            );
+                            sub_value
                         }
                         FieldOrObjectType::Object(object_type) => {
                             let field_type = object_type
@@ -436,7 +447,7 @@ impl Query {
                                 .expect("this cannot happen on an already validated query; qed");
 
                             let mut sub_value = Default::default();
-                            self.do_stuff(
+                            self.generate_sub_response(
                                 selection_set
                                     .as_ref()
                                     .expect("object_types require selection sets; qed"),
@@ -452,38 +463,10 @@ impl Query {
                     };
                     output.deep_merge(Value::from_path(&path, sub_value));
                 }
-                Selection::InlineFragment {
-                    fragment:
-                        Fragment {
-                            type_condition,
-                            selection_set,
-                        },
-                } => {
-                    self.do_stuff(
-                        selection_set,
-                        output,
-                        schema,
-                        field_or_object_type,
-                        parent_path.clone(),
-                    );
-                }
-                Selection::FragmentSpread { name } => {
-                    if let Some(fragment) = self
-                        .fragments
-                        .get(name)
-                        .or_else(|| schema.fragments.get(name))
-                    {
-                        self.do_stuff(
-                            &fragment.selection_set,
-                            output,
-                            schema,
-                            &field_or_object_type,
-                            parent_path.clone(),
-                        );
-                    } else {
-                        panic!("Missing fragment named: {}", name);
-                    }
-                }
+                // TODO: fragments aren't supported yet
+                Selection::InlineFragment { .. } => {}
+                // TODO: fragments aren't supported yet
+                Selection::FragmentSpread { .. } => {}
             }
         }
     }
