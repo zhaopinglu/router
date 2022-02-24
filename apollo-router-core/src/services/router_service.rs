@@ -99,7 +99,6 @@ where
             .query
             .clone()
             .expect("checked above; qed");
-
         if let Some(response) = self.naive_introspection.get(query.as_str()) {
             return Box::pin(async move {
                 Ok(RouterResponse {
@@ -128,10 +127,10 @@ where
                 let operation_name = body.operation_name.clone();
                 let planned_query = planning
                     .call(QueryPlannerRequest {
-                        context: req.context.into(),
+                        context: req.context.clone().into(),
                     })
                     .await;
-                let mut response = match planned_query {
+                let response = match planned_query {
                     Ok(planned_query) => {
                         execution
                             .call(ExecutionRequest {
@@ -143,22 +142,29 @@ where
                     Err(err) => Err(err),
                 };
 
-                if let Ok(response) = &mut response {
-                    if let Some(query) = query {
-                        tracing::debug_span!("format_response").in_scope(move || {
-                            query.format_response(
-                                response.response.body_mut(),
-                                operation_name.as_deref(),
-                                &schema,
-                            )
-                        });
-                    }
-                }
+                match response {
+                    Ok(mut response) => {
+                        if let Some(query) = query {
+                            tracing::debug_span!("format_response").in_scope(|| {
+                                query.format_response(
+                                    response.response.body_mut(),
+                                    operation_name.as_deref(),
+                                    &schema,
+                                )
+                            });
+                        }
 
-                response.map(|execution_response| RouterResponse {
-                    response: execution_response.response.map(ResponseBody::GraphQL),
-                    context: execution_response.context,
-                })
+                        Ok(RouterResponse {
+                            response: response.response.map(ResponseBody::GraphQL),
+                            context: response.context,
+                        })
+                    }
+                    Err(error) => Ok(RouterResponse {
+                        response: http::Response::new(ResponseBody::RawString(error.to_string()))
+                            .into(),
+                        context: req.context.into(),
+                    }),
+                }
             }
         };
 
