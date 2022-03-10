@@ -1,7 +1,7 @@
 use apollo_router_core::Schema;
 use criterion::{criterion_group, criterion_main, Criterion};
 use once_cell::sync::Lazy;
-use router_bridge::plan;
+use router_bridge::plan::{self, BridgePlanner};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -30,14 +30,35 @@ fn plan_query(schema: Arc<Schema>) {
     assert_eq!(&*EXPECTED_PLAN, &plan);
 }
 
-fn from_elem(c: &mut Criterion) {
+fn plan_query_v2(planner: BridgePlanner) {
+    let context = plan::OperationalContext2 {
+        query: QUERY.to_string(),
+        operation_name: "".to_string(),
+    };
+
+    let plan = planner.plan::<serde_json::Value>(context).unwrap().unwrap();
+
+    assert_eq!(&*EXPECTED_PLAN, &plan);
+}
+
+fn query_plan_v1(c: &mut Criterion) {
     let schema: Arc<Schema> =
         Arc::new(include_str!("fixtures/supergraph.graphql").parse().unwrap());
 
-    c.bench_function("query_planning", move |b| {
+    c.bench_function("query_planning_v1", move |b| {
         b.iter(|| plan_query(schema.clone()));
     });
 }
 
-criterion_group!(benches, from_elem);
+fn query_plan_v2(c: &mut Criterion) {
+    let schema: Arc<String> = Arc::new(include_str!("fixtures/supergraph.graphql").to_string());
+
+    let planner = BridgePlanner::new(schema).unwrap();
+
+    c.bench_function("query_planning_v2", move |b| {
+        b.iter(|| plan_query_v2(planner.clone()));
+    });
+}
+
+criterion_group!(benches, query_plan_v2, query_plan_v1);
 criterion_main!(benches);
