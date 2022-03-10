@@ -182,6 +182,7 @@ dependencies = [
  "criterion",
  "futures",
  "once_cell",
+ "router-bridge",
  "serde_json",
  "serde_json_bytes",
  "tokio",
