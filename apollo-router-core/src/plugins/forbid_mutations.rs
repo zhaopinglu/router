@@ -8,22 +8,22 @@ use tower::{BoxError, ServiceBuilder, ServiceExt};
 
 #[derive(Debug, Clone)]
 struct ForbidMutations {
-    forbid: bool,
+    enabled: bool,
 }
 
 #[async_trait::async_trait]
 impl Plugin for ForbidMutations {
     type Config = bool;
 
-    fn new(forbid: Self::Config) -> Result<Self, BoxError> {
-        Ok(ForbidMutations { forbid })
+    fn new(enabled: Self::Config) -> Result<Self, BoxError> {
+        Ok(ForbidMutations { enabled })
     }
 
     fn execution_service(
         &mut self,
         service: BoxService<ExecutionRequest, ExecutionResponse, BoxError>,
     ) -> BoxService<ExecutionRequest, ExecutionResponse, BoxError> {
-        if self.forbid {
+        if self.enabled {
             ServiceBuilder::new()
                 .checkpoint(|req: ExecutionRequest| {
                     if req.query_plan.contains_mutations() {
