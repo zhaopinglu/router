@@ -41,15 +41,10 @@ impl Service<SubgraphRequest> for MockSubgraph {
         let response = if let Some(response) = self.mocks.get(req.http_request.body()) {
             builder.data(response.data.clone()).build().into()
         } else {
-            builder
-                .errors(vec![apollo_router_core::Error {
-                    message: "couldn't find mock for query".to_string(),
-                    locations: Default::default(),
-                    path: Default::default(),
-                    extensions: Default::default(),
-                }])
-                .build()
-                .into()
+            panic!(
+                "couldn't find mock for query {}",
+                serde_json::to_string(req.http_request.body()).unwrap()
+            );
         };
         future::ok(response)
     }
@@ -81,13 +76,18 @@ async fn basic_composition_benchmark(
         .call(request)
         .await
         .unwrap();
-    assert_eq!(response.response.body(), &*EXPECTED_RESPONSE,);
+    assert_eq!(
+        response.response.body(),
+        &*EXPECTED_RESPONSE,
+        "\nresponse missmatch\n{}",
+        serde_json::to_string(response.response.body()).unwrap()
+    );
 }
 
 fn from_elem(c: &mut Criterion) {
     let account_mocks = vec![
         (
-            r#"{"query":"query($representations:[_Any!]!){_entities(representations:$representations){...on User{name}}}","variables":{"representations":[{"__typename":"User","id":"1"},{"__typename":"User","id":"2"},{"__typename":"User","id":"1"}]}}"#,
+            r#"{"query":"query TopProducts__accounts__3($representations:[_Any!]!){_entities(representations:$representations){...on User{name}}}","variables":{"representations":[{"__typename":"User","id":"1"},{"__typename":"User","id":"2"},{"__typename":"User","id":"1"}]}}"#,
             r#"{"data":{"_entities":[{"name":"Ada Lovelace"},{"name":"Alan Turing"},{"name":"Ada Lovelace"}]}}"#
         )
     ].into_iter().map(|(query, response)| (serde_json::from_str(query).unwrap(), serde_json::from_str(response).unwrap())).collect();
@@ -95,19 +95,19 @@ fn from_elem(c: &mut Criterion) {
 
     let review_mocks = vec![
         (
-            r#"{"query":"query($representations:[_Any!]!){_entities(representations:$representations){...on Product{reviews{id product{__typename upc}author{__typename id}}}}}","variables":{"representations":[{"__typename":"Product","upc":"1"},{"__typename":"Product","upc":"2"}]}}"#,
+            r#"{"query":"query TopProducts__reviews__1($representations:[_Any!]!){_entities(representations:$representations){...on Product{reviews{id product{__typename upc}author{__typename id}}}}}","variables":{"representations":[{"__typename":"Product","upc":"1"},{"__typename":"Product","upc":"2"}]}}"#,
             r#"{"data":{"_entities":[{"reviews":[{"id":"1","product":{"__typename":"Product","upc":"1"},"author":{"__typename":"User","id":"1"}},{"id":"4","product":{"__typename":"Product","upc":"1"},"author":{"__typename":"User","id":"2"}}]},{"reviews":[{"id":"2","product":{"__typename":"Product","upc":"2"},"author":{"__typename":"User","id":"1"}}]}]}}"#
-        ),
+        )
         ].into_iter().map(|(query, response)| (serde_json::from_str(query).unwrap(), serde_json::from_str(response).unwrap())).collect();
     let review_service = MockSubgraph::new(review_mocks);
 
     let product_mocks = vec![
         (
-            r#"{"query":"query($first:Int){topProducts(first:$first){__typename upc name}}","variables":{"first":2}}"#,
+            r#"{"query":"query TopProducts__products__0($first:Int){topProducts(first:$first){__typename upc name}}","variables":{"first":2}}"#,
             r#"{"data":{"topProducts":[{"__typename":"Product","upc":"1","name":"Table"},{"__typename":"Product","upc":"2","name":"Couch"}]}}"#
         ),
         (
-            r#"{"query":"query($representations:[_Any!]!){_entities(representations:$representations){...on Product{name}}}","variables":{"representations":[{"__typename":"Product","upc":"1"},{"__typename":"Product","upc":"1"},{"__typename":"Product","upc":"2"}]}}"#,
+            r#"{"query":"query TopProducts__products__2($representations:[_Any!]!){_entities(representations:$representations){...on Product{name}}}","variables":{"representations":[{"__typename":"Product","upc":"1"},{"__typename":"Product","upc":"1"},{"__typename":"Product","upc":"2"}]}}"#,
             r#"{"data":{"_entities":[{"name":"Table"},{"name":"Table"},{"name":"Couch"}]}}"#
         )
         ].into_iter().map(|(query, response)| (serde_json::from_str(query).unwrap(), serde_json::from_str(response).unwrap())).collect();

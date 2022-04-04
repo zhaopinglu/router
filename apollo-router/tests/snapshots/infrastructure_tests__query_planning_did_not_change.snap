@@ -1,0 +1,175 @@
+---
+source: apollo-router/tests/infrastructure_tests.rs
+assertion_line: 35
+expression: query_plan
+---
+QueryPlan {
+    root: Sequence {
+        nodes: [
+            Fetch(
+                FetchNode {
+                    service_name: "products",
+                    requires: [],
+                    variable_usages: [
+                        "first",
+                    ],
+                    operation: "query TopProducts__products__0($first:Int){topProducts(first:$first){__typename upc name}}",
+                    operation_kind: Query,
+                },
+            ),
+            Flatten(
+                FlattenNode {
+                    path: Path(
+                        [
+                            Key(
+                                "topProducts",
+                            ),
+                            Flatten,
+                        ],
+                    ),
+                    node: Fetch(
+                        FetchNode {
+                            service_name: "reviews",
+                            requires: [
+                                InlineFragment(
+                                    InlineFragment {
+                                        type_condition: Some(
+                                            "Product",
+                                        ),
+                                        selections: [
+                                            Field(
+                                                Field {
+                                                    alias: None,
+                                                    name: "__typename",
+                                                    selections: None,
+                                                },
+                                            ),
+                                            Field(
+                                                Field {
+                                                    alias: None,
+                                                    name: "upc",
+                                                    selections: None,
+                                                },
+                                            ),
+                                        ],
+                                    },
+                                ),
+                            ],
+                            variable_usages: [],
+                            operation: "query TopProducts__reviews__1($representations:[_Any!]!){_entities(representations:$representations){...on Product{reviews{id product{__typename upc}author{__typename id}}}}}",
+                            operation_kind: Query,
+                        },
+                    ),
+                },
+            ),
+            Parallel {
+                nodes: [
+                    Flatten(
+                        FlattenNode {
+                            path: Path(
+                                [
+                                    Key(
+                                        "topProducts",
+                                    ),
+                                    Flatten,
+                                    Key(
+                                        "reviews",
+                                    ),
+                                    Flatten,
+                                    Key(
+                                        "product",
+                                    ),
+                                ],
+                            ),
+                            node: Fetch(
+                                FetchNode {
+                                    service_name: "products",
+                                    requires: [
+                                        InlineFragment(
+                                            InlineFragment {
+                                                type_condition: Some(
+                                                    "Product",
+                                                ),
+                                                selections: [
+                                                    Field(
+                                                        Field {
+                                                            alias: None,
+                                                            name: "__typename",
+                                                            selections: None,
+                                                        },
+                                                    ),
+                                                    Field(
+                                                        Field {
+                                                            alias: None,
+                                                            name: "upc",
+                                                            selections: None,
+                                                        },
+                                                    ),
+                                                ],
+                                            },
+                                        ),
+                                    ],
+                                    variable_usages: [],
+                                    operation: "query TopProducts__products__2($representations:[_Any!]!){_entities(representations:$representations){...on Product{name}}}",
+                                    operation_kind: Query,
+                                },
+                            ),
+                        },
+                    ),
+                    Flatten(
+                        FlattenNode {
+                            path: Path(
+                                [
+                                    Key(
+                                        "topProducts",
+                                    ),
+                                    Flatten,
+                                    Key(
+                                        "reviews",
+                                    ),
+                                    Flatten,
+                                    Key(
+                                        "author",
+                                    ),
+                                ],
+                            ),
+                            node: Fetch(
+                                FetchNode {
+                                    service_name: "accounts",
+                                    requires: [
+                                        InlineFragment(
+                                            InlineFragment {
+                                                type_condition: Some(
+                                                    "User",
+                                                ),
+                                                selections: [
+                                                    Field(
+                                                        Field {
+                                                            alias: None,
+                                                            name: "__typename",
+                                                            selections: None,
+                                                        },
+                                                    ),
+                                                    Field(
+                                                        Field {
+                                                            alias: None,
+                                                            name: "id",
+                                                            selections: None,
+                                                        },
+                                                    ),
+                                                ],
+                                            },
+                                        ),
+                                    ],
+                                    variable_usages: [],
+                                    operation: "query TopProducts__accounts__3($representations:[_Any!]!){_entities(representations:$representations){...on User{name}}}",
+                                    operation_kind: Query,
+                                },
+                            ),
+                        },
+                    ),
+                ],
+            },
+        ],
+    },
+}

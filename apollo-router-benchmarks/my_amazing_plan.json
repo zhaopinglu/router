@@ -1,0 +1,87 @@
+{
+  "kind": "QueryPlan",
+  "node": {
+    "kind": "Sequence",
+    "nodes": [
+      {
+        "kind": "Fetch",
+        "serviceName": "products",
+        "variableUsages": ["first"],
+        "operation": "query TopProducts__products__0($first:Int){topProducts(first:$first){__typename upc name}}",
+        "operationKind": "query",
+        "operationName": "TopProducts__products__0"
+      },
+      {
+        "kind": "Flatten",
+        "path": ["topProducts", "@"],
+        "node": {
+          "kind": "Fetch",
+          "serviceName": "reviews",
+          "requires": [
+            {
+              "kind": "InlineFragment",
+              "typeCondition": "Product",
+              "selections": [
+                { "kind": "Field", "name": "__typename" },
+                { "kind": "Field", "name": "upc" }
+              ]
+            }
+          ],
+          "variableUsages": [],
+          "operation": "query TopProducts__reviews__1($representations:[_Any!]!){_entities(representations:$representations){...on Product{reviews{id product{__typename upc}author{__typename id}}}}}",
+          "operationKind": "query",
+          "operationName": "TopProducts__reviews__1"
+        }
+      },
+      {
+        "kind": "Parallel",
+        "nodes": [
+          {
+            "kind": "Flatten",
+            "path": ["topProducts", "@", "reviews", "@", "product"],
+            "node": {
+              "kind": "Fetch",
+              "serviceName": "products",
+              "requires": [
+                {
+                  "kind": "InlineFragment",
+                  "typeCondition": "Product",
+                  "selections": [
+                    { "kind": "Field", "name": "__typename" },
+                    { "kind": "Field", "name": "upc" }
+                  ]
+                }
+              ],
+              "variableUsages": [],
+              "operation": "query TopProducts__products__2($representations:[_Any!]!){_entities(representations:$representations){...on Product{name}}}",
+              "operationKind": "query",
+              "operationName": "TopProducts__products__2"
+            }
+          },
+          {
+            "kind": "Flatten",
+            "path": ["topProducts", "@", "reviews", "@", "author"],
+            "node": {
+              "kind": "Fetch",
+              "serviceName": "accounts",
+              "requires": [
+                {
+                  "kind": "InlineFragment",
+                  "typeCondition": "User",
+                  "selections": [
+                    { "kind": "Field", "name": "__typename" },
+                    { "kind": "Field", "name": "id" }
+                  ]
+                }
+              ],
+              "variableUsages": [],
+              "operation": "query TopProducts__accounts__3($representations:[_Any!]!){_entities(representations:$representations){...on User{name}}}",
+              "operationKind": "query",
+              "operationName": "TopProducts__accounts__3"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
