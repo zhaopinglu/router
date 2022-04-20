@@ -564,6 +564,32 @@ mod tests {
     }
 
     #[tokio::test]
+    #[should_panic(expected = "this panic should be propagated to the test harness")]
+    async fn mock_subgraph_service_withf_panics_should_be_propagated() {
+        let query_plan: QueryPlan = QueryPlan {
+            root: serde_json::from_str(test_query_plan!()).unwrap(),
+        };
+
+        let mut mock_products_service = plugin_utils::MockSubgraphService::new();
+        mock_products_service.expect_call().times(1).withf(|_| {
+            panic!("this panic should be propagated to the test harness");
+        });
+
+        query_plan
+            .execute(
+                &Context::new().with_request(Arc::new(http_compat::Request::mock())),
+                &ServiceRegistry::new(HashMap::from([(
+                    "product".into(),
+                    ServiceBuilder::new()
+                        .buffer(1)
+                        .service(mock_products_service.build().boxed()),
+                )])),
+                &Schema::from_str(test_schema!()).unwrap(),
+            )
+            .await;
+    }
+
+    #[tokio::test]
     async fn fetch_includes_operation_name() {
         let query_plan: QueryPlan = QueryPlan {
             root: serde_json::from_str(test_query_plan!()).unwrap(),
