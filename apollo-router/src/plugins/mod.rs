@@ -8,5 +8,6 @@ mod headers;
 mod include_subgraph_errors;
 pub mod override_url;
 pub mod rhai;
+pub mod statsd;
 pub mod telemetry;
 pub(crate) mod traffic_shaping;
