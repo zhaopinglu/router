@@ -20,7 +20,7 @@ use crate::*;
 /// A GraphQL schema.
 #[derive(Debug, Default, Clone)]
 pub struct Schema {
-    string: String,
+    pub(crate) string: String,
     subtype_map: HashMap<String, HashSet<String>>,
     subgraphs: HashMap<String, Uri>,
     pub(crate) object_types: HashMap<String, ObjectType>,

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use apollo_compiler::values;
+use apollo_compiler::ApolloCompiler;
 pub(crate) use bridge_query_planner::*;
 pub(crate) use caching_query_planner::*;
 pub use fetch::OperationKind;
@@ -10,6 +12,7 @@ use serde::Deserialize;
 use tracing::Instrument;
 
 use crate::error::Error;
+use crate::graphql::Error as gqlError;
 use crate::graphql::Request;
 use crate::graphql::Response;
 use crate::json_ext::Path;
@@ -115,6 +118,90 @@ impl QueryPlan {
 
         log::trace_query_plan(&self.root);
 
+        if let Some(query) = &originating_request.body().query {
+            // Combine schema and query for compile
+            // TODO: In the future, when ApolloCompiler supports this, we'll only parse the schema
+            // once per schema. This will take place in schema.rs. We'll then store the compiler
+            // context for the schema and combine it with the parsed operation. Until that time,
+            // we re-compile the schema for each query.
+            let schema_plus_query = format!("{}\n{}", schema.string, query);
+            let ctx = ApolloCompiler::new(&schema_plus_query);
+            let diagnostics = ctx.validate();
+
+            for diagnostic in diagnostics {
+                tracing::info!(%diagnostic, "query diagnostic");
+            }
+
+            let directive_definitions = ctx.directive_definitions();
+            for directive in &*directive_definitions {
+                if directive.name().starts_with("auth__") {
+                    tracing::info!("{:?}", directive);
+                }
+            }
+            // Figure out our list of controlled fields once
+            // TODO: Disregarding object type for now
+            fn is_restricted(ctx: &ApolloCompiler, field: &values::Field) -> bool {
+                for object in ctx.object_types().iter() {
+                    for field_def in object.fields_definition() {
+                        for directive in field_def.directives() {
+                            if directive.name().starts_with("auth__") {
+                                tracing::info!("{:?}", object);
+                                tracing::info!("{:?}", field_def);
+                                tracing::info!("{:?}", directive);
+                                return field_def.name() == field.name();
+                            }
+                        }
+                    }
+                }
+                false
+            }
+
+            let operations = ctx.operations();
+            for operation in &*operations {
+                let selection_set = operation.selection_set();
+                tracing::info!(?operation, "operation");
+                for selection in selection_set {
+                    tracing::info!(?selection, "operation selection");
+                }
+                for field in &*operation.fields(&ctx.db) {
+                    tracing::info!(?field, "operation field");
+                    let selection_set = field.selection_set();
+                    for selection in selection_set {
+                        tracing::info!(?selection, "selection field");
+                        if let values::Selection::Field(field) = selection {
+                            if is_restricted(&ctx, field) {
+                                tracing::info!("RESTRICTED FIELD, {:?}", field);
+                                // At this point we have correctly deduced that our field
+                                // is required to comply with some kind of schema expressed
+                                // value. Let's force it to fail.
+                                let error = gqlError::builder()
+                                    .message(format!(
+                                        "authz failure. {} role required to access {} field.",
+                                        "ADMIN",
+                                        field.name()
+                                    ))
+                                    .build();
+                                return Response::builder().error(error).build();
+                            }
+                            let directive_definitions = field.directives();
+                            for directive in &*directive_definitions {
+                                if directive.name().starts_with("auth__") {
+                                    tracing::info!("{:?}", directive);
+                                    tracing::info!("{:?}", field);
+                                }
+                            }
+                        }
+                    }
+                }
+                for field in &*operation.fields_in_inline_fragments(&ctx.db) {
+                    tracing::info!(?field, "inline fragment field");
+                }
+                for field in &*operation.fields_in_fragment_spread(&ctx.db) {
+                    tracing::info!(?field, "fragment spread field");
+                }
+            }
+        }
+        tracing::info!(?originating_request, ?schema, "BEFORE RECURSING");
         let (value, errors) = self
             .root
             .execute_recursively(
