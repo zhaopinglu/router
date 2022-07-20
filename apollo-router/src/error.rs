@@ -207,6 +207,9 @@ pub enum QueryPlannerError {
 
     /// introspection error: {0}
     Introspection(IntrospectionError),
+
+    /// query evaluation error
+    QueryEvaluation,
 }
 
 #[derive(Clone, Debug, Error)]

@@ -3,6 +3,8 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use apollo_compiler::values;
+use apollo_compiler::ApolloCompiler;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use opentelemetry::trace::SpanKind;
@@ -82,6 +84,58 @@ impl BridgeQueryPlanner {
         options: QueryPlanOptions,
         selections: Query,
     ) -> Result<QueryPlannerContent, QueryPlannerError> {
+        // Note:
+        // Current interception point for schema driven behaviour
+        // Combine schema and query for compile
+        // TODO: In the future, when ApolloCompiler supports this, we'll only parse the schema
+        // once per schema. This will take place in schema.rs. We'll then store the compiler
+        // context for the schema and combine it with the parsed operation. Until that time,
+        // we re-compile the schema for each query.
+        // Note: All done in a scope to help the compiler know that we are done with these
+        // variables.
+        {
+            let schema_plus_query = format!("{}\n{}", self.schema.string, query);
+            let ctx = ApolloCompiler::new(&schema_plus_query);
+            let diagnostics = ctx.validate();
+
+            for diagnostic in diagnostics {
+                tracing::info!(%diagnostic, "query diagnostic");
+            }
+
+            // Figure out our list of controlled fields once
+            // TODO: Disregarding object type for now
+            fn is_restricted(ctx: &ApolloCompiler, field: &values::Field) -> bool {
+                for object in ctx.object_types().iter() {
+                    for field_def in object.fields_definition() {
+                        for directive in field_def.directives() {
+                            if directive.name().starts_with("auth__") {
+                                return field_def.name() == field.name();
+                            }
+                        }
+                    }
+                }
+                false
+            }
+
+            let operations = ctx.operations();
+
+            for operation in &*operations {
+                for field in &*operation.fields(&ctx.db) {
+                    let selection_set = field.selection_set();
+                    for selection in selection_set.selection() {
+                        if let values::Selection::Field(field) = selection {
+                            if is_restricted(&ctx, field) {
+                                tracing::info!(?field, "RESTRICTED FIELD");
+                                // At this point we have correctly deduced that our field
+                                // is required to comply with some kind of schema expressed
+                                // value. Let's force it to fail.
+                                return Err(QueryPlannerError::QueryEvaluation);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let planner_result = self
             .planner
             .plan(query, operation)
