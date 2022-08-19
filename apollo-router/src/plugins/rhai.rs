@@ -1278,7 +1278,7 @@ impl Rhai {
             })
             .register_fn("span_info_enter", |out: Dynamic| -> Span {
                 let my_out = out.to_string();
-                tracing::info_span!("rhai_info", out = &(&my_out[..]), "otel.kind" = %SpanKind::Internal)
+                tracing::info_span!(parent: Span::current(), "rhai_info", out = &(&my_out[..]), "otel.kind" = %SpanKind::Internal)
             })
             .register_fn("span_info_exit", |span: Span| {
                 drop(span);
