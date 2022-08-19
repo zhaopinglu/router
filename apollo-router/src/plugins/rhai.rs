@@ -18,7 +18,7 @@ use http::uri::PathAndQuery;
 use http::HeaderMap;
 use http::StatusCode;
 use http::Uri;
-use once_cell::sync::OnceCell;
+use opentelemetry::trace::SpanKind;
 use rhai::module_resolvers::FileModuleResolver;
 use rhai::plugin::*;
 use rhai::serde::from_dynamic;
@@ -38,7 +38,6 @@ use tower::util::BoxService;
 use tower::BoxError;
 use tower::ServiceBuilder;
 use tower::ServiceExt;
-use tracing::field;
 use tracing::Span;
 
 use crate::error::Error;
@@ -56,8 +55,6 @@ use crate::ExecutionRequest;
 use crate::ExecutionResponse;
 use crate::SupergraphRequest;
 use crate::SupergraphResponse;
-
-static RHAI_SPAN: OnceCell<Arc<Mutex<Option<Span>>>> = OnceCell::new();
 
 trait OptionDance<T> {
     fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R;
@@ -1279,17 +1276,12 @@ impl Rhai {
             .register_fn("span_debug", |out: Dynamic| {
                 tracing::debug_span!("rhai_debug", "{}", out.to_string());
             })
-            .register_fn("span_info", |out: Dynamic| {
-                let mut guard = RHAI_SPAN
-                    .get_or_init(|| Arc::new(Mutex::new(None)))
-                    .lock()
-                    .expect("we've locked our span");
-                if guard.is_some() {
-                    let span = guard.take();
-                    drop(span.unwrap());
-                }
+            .register_fn("span_info_enter", |out: Dynamic| -> Span {
                 let my_out = out.to_string();
-                *guard = Some(tracing::info_span!("rhai_info", out = &(&my_out[..])));
+                tracing::info_span!("rhai_info", out = &(&my_out[..]), "otel.kind" = %SpanKind::Internal)
+            })
+            .register_fn("span_info_exit", |span: Span| {
+                drop(span);
             })
             .register_fn("span_warn", |out: Dynamic| {
                 tracing::warn_span!("rhai_warn", "{}", out.to_string());
