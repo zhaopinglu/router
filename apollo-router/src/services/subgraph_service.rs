@@ -19,9 +19,16 @@ use http::HeaderMap;
 use http::HeaderValue;
 use http::StatusCode;
 use hyper::client::HttpConnector;
+use hyper_rustls::ConfigBuilderExt;
 use hyper_rustls::HttpsConnector;
 use opentelemetry::global;
 use opentelemetry::trace::SpanKind;
+use rustls::client::HandshakeSignatureValid;
+use rustls::client::ServerCertVerified;
+use rustls::client::ServerCertVerifier;
+use rustls::internal::msgs::handshake::DigitallySignedStruct;
+use rustls::Error;
+use rustls::ServerName;
 use schemars::JsonSchema;
 use tokio::io::AsyncWriteExt;
 use tower::util::BoxService;
@@ -69,12 +76,30 @@ pub(crate) struct SubgraphService {
 
 impl SubgraphService {
     pub(crate) fn new(service: impl Into<String>) -> Self {
-        let connector = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()
-            .https_or_http()
-            .enable_http1()
-            .enable_http2()
-            .build();
+        let builder = hyper_rustls::HttpsConnectorBuilder::new();
+
+        let builder = if true {
+            builder
+                .with_native_roots()
+                .https_or_http()
+                .enable_http1()
+                .enable_http2()
+        } else {
+            let mut config = rustls::client::ClientConfig::builder()
+                .with_safe_defaults()
+                .with_native_roots()
+                .with_no_client_auth();
+            config
+                .dangerous()
+                .set_certificate_verifier(Arc::new(NoVerifier));
+            builder
+                .with_tls_config(config)
+                .https_or_http()
+                .enable_http1()
+                .enable_http2()
+        };
+
+        let connector = builder.build();
 
         Self {
             client: ServiceBuilder::new()
@@ -334,6 +359,43 @@ impl SubgraphServiceFactory for SubgraphCreator {
                 .rev()
                 .fold(service, |acc, (_, e)| e.subgraph_service(name, acc))
         })
+    }
+}
+
+pub(crate) struct NoVerifier;
+
+impl ServerCertVerifier for NoVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::Certificate,
+        _intermediates: &[rustls::Certificate],
+        _server_name: &ServerName,
+        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _ocsp_response: &[u8],
+        _now: std::time::SystemTime,
+    ) -> Result<ServerCertVerified, Error> {
+        tracing::error!("verify_server_cert");
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::Certificate,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        tracing::error!("verify_tls12_signature");
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::Certificate,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        tracing::error!("verify_tls13_signature");
+        Ok(HandshakeSignatureValid::assertion())
     }
 }
 

@@ -32,3 +32,6 @@ members = [
 # debug = false
 strip = "debuginfo"
 incremental = false
+
+[patch.crates-io]
+rustls-native-certs = { path = "../rustls-native-certs" }

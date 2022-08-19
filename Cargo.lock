@@ -186,6 +186,7 @@ dependencies = [
  "reqwest",
  "rhai",
  "router-bridge",
+ "rustls 0.20.6",
  "schemars",
  "serde",
  "serde_json",
@@ -2466,7 +2467,7 @@ dependencies = [
  "http",
  "hyper",
  "log",
- "rustls 0.20.4",
+ "rustls 0.20.6",
  "rustls-native-certs",
  "tokio",
  "tokio-rustls 0.23.3",
@@ -4315,7 +4316,7 @@ dependencies = [
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
- "rustls 0.20.4",
+ "rustls 0.20.6",
  "rustls-native-certs",
  "rustls-pemfile",
  "serde",
@@ -4597,9 +4598,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.20.4"
+version = "0.20.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fbfeb8d0ddb84706bc597a5574ab8912817c52a397f819e5b614e2265206921"
+checksum = "5aab8ee6c7097ed6057f43c187a62418d0c05a4bd5f18b3571db50ee0f9ce033"
 dependencies = [
  "log",
  "ring",
@@ -4610,8 +4611,6 @@ dependencies = [
 [[package]]
 name = "rustls-native-certs"
 version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0167bac7a9f490495f3c33013e7722b53cb087ecbe082fb0c6387c96f634ea50"
 dependencies = [
  "openssl-probe",
  "rustls-pemfile",
@@ -5598,7 +5597,7 @@ version = "0.23.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4151fda0cf2798550ad0b34bcfc9b9dcc2a9d2471c895c68f3a8818e54f2389e"
 dependencies = [
- "rustls 0.20.4",
+ "rustls 0.20.6",
  "tokio",
  "webpki 0.22.0",
 ]
