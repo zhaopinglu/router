@@ -38,6 +38,7 @@ use tower::util::BoxService;
 use tower::BoxError;
 use tower::ServiceBuilder;
 use tower::ServiceExt;
+use tracing::field;
 use tracing::Span;
 
 use crate::error::Error;
@@ -1276,11 +1277,15 @@ impl Rhai {
             .register_fn("span_debug", |out: Dynamic| {
                 tracing::debug_span!("rhai_debug", "{}", out.to_string());
             })
-            .register_fn("span_info_enter", |out: Dynamic| -> Span {
-                let my_out = out.to_string();
-                tracing::info_span!(parent: Span::current(), "rhai_info", out = &(&my_out[..]), "otel.kind" = %SpanKind::Internal)
+            .register_fn("span_info", || -> Span {
+                tracing::info_span!("rhai_info", out = field::Empty, "otel.kind" = %SpanKind::Internal)
             })
-            .register_fn("span_info_exit", |span: Span| {
+            .register_fn("span_enter", |span: &mut Span, out: Dynamic| {
+                let my_out = out.to_string();
+                span.record("out", &(&my_out[..]));
+                // tracing::info_span!("rhai_info", out = &(&my_out[..]));
+            })
+            .register_fn("span_exit", |span: Span| {
                 drop(span);
             })
             .register_fn("span_warn", |out: Dynamic| {
