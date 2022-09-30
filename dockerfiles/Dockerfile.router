@@ -25,13 +25,18 @@ COPY dockerfiles/router.yaml config
 # Required so we can copy in libz.so.1
 FROM gcr.io/distroless/java17-debian11${DEBUG_IMAGE} as libz-required
 
+RUN cp /lib/$(uname -m)-linux-gnu/libz.so.1 /tmp/libz.so.1
+
 # Final image uses distroless
 FROM gcr.io/distroless/cc-debian11${DEBUG_IMAGE}
 
 LABEL org.opencontainers.image.authors="Apollo Graph, Inc. https://github.com/apollographql/router"
 
 # Copy in the extracted/created files
-COPY --from=libz-required /lib/x86_64-linux-gnu/libz.so.1 /lib/x86_64-linux-gnu/libz.so.1
+
+COPY --from=libz-required /tmp/libz.so.1 /tmp/libz.so.1
+
+RUN mv /tmp/libz.so.1 /lib/$(uname -m)-linux-gnu/libz.so.1
 
 WORKDIR /dist
 
