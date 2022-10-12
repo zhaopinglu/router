@@ -25,23 +25,3 @@ By [@USERNAME](https://github.com/USERNAME) in https://github.com/apollographql/
 
 # [x.x.x] (unreleased) - 2022-mm-dd
 
-## ❗ BREAKING ❗
-## 🚀 Features
-## 🐛 Fixes
-
-### `traffic_shaping.all.deduplicate_query` was not correctly set ([PR #1901](https://github.com/apollographql/router/pull/1901))
-
-Due to a change in our traffic_shaping configuration the `deduplicate_query` field for all subgraph wasn't set correctly.
-
-By [@bnjjj](https://github.com/bnjjj) in https://github.com/apollographql/router/pull/1901
-
-## 🛠 Maintenance
-
-### Fix hpa yaml for appropriate kubernetes versions ([#1908](https://github.com/apollographql/router/pull/1908))
-
-Correct schema for autoscaling/v2beta2 and autoscaling/v2 api versions of the
-HorizontalPodAutoscaler within the helm chart
-
-By [@damienpontifex](https://github.com/damienpontifex) in https://github.com/apollographql/router/issues/1914
-
-## 📚 Documentation
