@@ -84,7 +84,11 @@ impl SubgraphService {
         Self {
             client: ServiceBuilder::new()
                 .layer(DecompressionLayer::new())
-                .service(hyper::Client::builder().build(connector)),
+                .service(
+                    hyper::Client::builder()
+                        .http2_max_concurrent_reset_streams(1100)
+                        .build(connector),
+                ),
             service: Arc::new(service.into()),
         }
     }
