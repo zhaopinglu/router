@@ -532,9 +532,9 @@ jobs:
             # Note: GH Token owned by apollo-bot2, no expire
             echo ${GITHUB_OCI_TOKEN} | docker login ghcr.io -u apollo-bot2 --password-stdin
             # Build debug image
-            docker buildx build --platform linux/amd64,linux/arm64 --push --build-arg ROUTER_RELEASE=${VERSION} --build-arg DEBUG_IMAGE=":debug" -f dockerfiles/Dockerfile.router -t ${ROUTER_TAG}:${VERSION}-debug .
+            docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 --push --build-arg ROUTER_RELEASE=${VERSION} --build-arg DEBUG_IMAGE=":debug" -f dockerfiles/Dockerfile.router -t ${ROUTER_TAG}:${VERSION}-debug .
             # Build release image
-            docker buildx build --platform linux/amd64,linux/arm64 --push --build-arg ROUTER_RELEASE=${VERSION} -f dockerfiles/Dockerfile.router -t ${ROUTER_TAG}:${VERSION} .
+            docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 --push --build-arg ROUTER_RELEASE=${VERSION} -f dockerfiles/Dockerfile.router -t ${ROUTER_TAG}:${VERSION} .
 
 workflows:
   ci_checks:
