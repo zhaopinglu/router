@@ -510,7 +510,7 @@ jobs:
   test_docker:
     docker:
       - image: cimg/base:stable
-    resource_class: small
+    resource_class: medium
     environment:
       <<: *common_job_environment
       VERSION: "v1.1.0"
