@@ -527,9 +527,8 @@ jobs:
           command: |
             ROUTER_TAG=ghcr.io/apollographql/router-experimental
             # We shouldn't need these next two lines, but ...
-            # docker context create buildx-build
-            # docker buildx create --use buildx-build
-            docker buildx create --use
+            docker context create buildx-build
+            docker buildx create --use buildx-build
             # Note: GH Token owned by apollo-bot2, no expire
             echo ${GITHUB_OCI_TOKEN} | docker login ghcr.io -u apollo-bot2 --password-stdin
             # Build debug image
