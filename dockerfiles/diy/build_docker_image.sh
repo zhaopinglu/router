@@ -1,7 +1,7 @@
 #! /bin/sh
 
 ###
-# Build docker images from git commit hash or tag or from released tarballs.
+# Build docker images from git commit hash or tag or from released version.
 #
 # See the usage message for more help
 # docker_build_image.sh -h
@@ -22,7 +22,7 @@
 ###
 usage () {
    printf "Usage: build_docker_image.sh [-b [-r <repo>]] [<release>]\n"
-   printf "\t-b build docker image from the default repo, if not present build from a released tarball\n"
+   printf "\t-b build docker image from the default repo, if not present build from a released version\n"
    printf "\t-r build docker image from a specified repo, only valid with -b flag\n"
    printf "\t<release> a valid release. If [-b] is specified, this is optional\n"
    printf "\tExample 1: Building HEAD from the repo\n"
@@ -33,7 +33,7 @@ usage () {
    printf "\t\tbuild_docker_image.sh -b v0.9.1\n"
    printf "\tExample 4: Building commit hash from the repo\n"
    printf "\t\tbuild_docker_image.sh -b 7f7d223f42af34fad35b898d976bc07d0f5440c5\n"
-   printf "\tExample 5: Building tag v0.9.1 from the released tarball\n"
+   printf "\tExample 5: Building tag v0.9.1 from the released version\n"
    printf "\t\tbuild_docker_image.sh v0.9.1\n"
    exit 2
 }
@@ -57,6 +57,7 @@ terminate () {
 ROUTER_VERSION=
 BUILD_IMAGE=false
 DEFAULT_REPO="https://github.com/apollographql/router.git"
+GIT_REPO=
 
 ###
 # Process Command Line
@@ -98,7 +99,7 @@ fi
 
 # If we aren't building, we need a ROUTER_VERSION
 if [ $# -gt 0 ]; then
-    if [ "${BUILD_IMAGE}" = false ] && [ "${GIT_REPO}" != "${DEFAULT_REPO}" ]; then
+    if [ "${BUILD_IMAGE}" = false ] && [ -n "${GIT_REPO}" ]; then
         usage
     fi
     ROUTER_VERSION="${1}"
@@ -121,8 +122,10 @@ fi
 echo "Building in: ${BUILD_DIR}"
 
 # Copy in our dockerfiles, we'll need them later
-cp dockerfiles/* "${BUILD_DIR}" || terminate "Couldn't copy dockerfiles to ${BUILD_DIR}"
-cp ../router.yaml "${BUILD_DIR}" || terminate "Couldn't copy ../router.yaml to ${BUILD_DIR}"
+mkdir "${BUILD_DIR}/dockerfiles"
+cp dockerfiles/Dockerfile.repo "${BUILD_DIR}" || terminate "Couldn't copy dockerfiles to ${BUILD_DIR}"
+cp ../Dockerfile.router "${BUILD_DIR}" || terminate "Couldn't copy dockerfiles to ${BUILD_DIR}"
+cp ../router.yaml "${BUILD_DIR}/dockerfiles" || terminate "Couldn't copy ../router.yaml to ${BUILD_DIR}"
 
 # Change to our build directory
 cd "${BUILD_DIR}" || terminate "Couldn't cd to ${BUILD_DIR}";
@@ -145,10 +148,10 @@ if [ "${BUILD_IMAGE}" = true ]; then
         || terminate "Couldn't build router image"
 else
     # Let the user know what we are going to do
-    echo "Building image: ${ROUTER_VERSION}" from released tarballs""
+    echo "Building image: ${ROUTER_VERSION}" from released version""
     docker build -q -t "router:${ROUTER_VERSION}" \
         --build-arg ROUTER_RELEASE="${ROUTER_VERSION}" \
-        --no-cache -f Dockerfile.release . \
+        --no-cache -f Dockerfile.router . \
         || terminate "Couldn't build router image"
 fi
 

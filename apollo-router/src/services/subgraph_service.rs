@@ -70,12 +70,16 @@ pub(crate) struct SubgraphService {
 
 impl SubgraphService {
     pub(crate) fn new(service: impl Into<String>) -> Self {
+        let mut http_connector = HttpConnector::new();
+        http_connector.set_nodelay(true);
+        http_connector.set_keepalive(Some(std::time::Duration::from_secs(60)));
+        http_connector.enforce_http(false);
         let connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
             .https_or_http()
             .enable_http1()
             .enable_http2()
-            .build();
+            .wrap_connector(http_connector);
 
         Self {
             client: ServiceBuilder::new()
@@ -104,7 +108,9 @@ impl tower::Service<crate::SubgraphRequest> for SubgraphService {
             ..
         } = request;
 
-        let mut client = self.client.clone();
+        let clone = self.client.clone();
+
+        let mut client = std::mem::replace(&mut self.client, clone);
         let service_name = (*self.service).to_owned();
 
         Box::pin(async move {

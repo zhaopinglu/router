@@ -1,6 +1,4 @@
-ARG DEBUG_IMAGE
-# Build is required to extract the release files
-FROM debian:bullseye-slim AS build
+FROM debian:bullseye-slim
 
 ARG ROUTER_RELEASE=latest
 
@@ -24,12 +22,6 @@ COPY dockerfiles/router.yaml config
 
 LABEL org.opencontainers.image.authors="Apollo Graph, Inc. https://github.com/apollographql/router"
 LABEL org.opencontainers.image.source="https://github.com/apollographql/router"
-
-# Copy in the extracted/created files
-
-# COPY --from=libz-required /lib/*64-linux-gnu/libz.so* /lib/*64-linux-gnu/
-
-WORKDIR /dist
 
 ENV APOLLO_ROUTER_CONFIG_PATH="/dist/config/router.yaml"
 
