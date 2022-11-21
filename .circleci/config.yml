@@ -550,7 +550,7 @@ workflows:
       - test_docker:
         matrix:
           parameters:
-            platform: [arm_linux_test]
+            platform: [amd_linux_test]
   release:
     jobs:
       - build_release:
