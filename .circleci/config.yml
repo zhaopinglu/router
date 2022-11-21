@@ -528,7 +528,7 @@ jobs:
       - run:
           name: Docker build
           command: |
-            ROUTER_TAG=ghcr.io/apollographql/router-experimental
+            ROUTER_TAG=ghcr.io/apollographql/router
             # Some black magic from the internet
             docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
             docker context create buildx-build
