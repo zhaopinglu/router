@@ -63,7 +63,7 @@ use crate::plugin::Plugin;
 use crate::plugin::PluginInit;
 use crate::plugins::telemetry::apollo::ForwardHeaders;
 use crate::plugins::telemetry::apollo::ENDPOINT_INVALID;
-use crate::plugins::telemetry::apollo_exporter::proto::StatsContext;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::StatsContext;
 use crate::plugins::telemetry::config::MetricsCommon;
 use crate::plugins::telemetry::config::Trace;
 use crate::plugins::telemetry::formatters::filter_metric_events;
@@ -1172,8 +1172,8 @@ fn operation_count(stats_report_key: &str) -> u64 {
 
 fn convert(
     referenced_fields: router_bridge::planner::ReferencedFieldsForType,
-) -> crate::plugins::telemetry::apollo_exporter::proto::ReferencedFieldsForType {
-    crate::plugins::telemetry::apollo_exporter::proto::ReferencedFieldsForType {
+) -> crate::plugins::telemetry::apollo_exporter::proto::reports::ReferencedFieldsForType {
+    crate::plugins::telemetry::apollo_exporter::proto::reports::ReferencedFieldsForType {
         field_names: referenced_fields.field_names,
         is_interface: referenced_fields.is_interface,
     }

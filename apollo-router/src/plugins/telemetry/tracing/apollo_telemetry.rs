@@ -23,15 +23,16 @@ use url::Url;
 use crate::axum_factory::utils::REQUEST_SPAN_NAME;
 use crate::plugins::telemetry;
 use crate::plugins::telemetry::apollo::SingleReport;
-use crate::plugins::telemetry::apollo_exporter::proto::trace::http::Values;
-use crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::FetchNode;
-use crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::FlattenNode;
-use crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::ParallelNode;
-use crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::ResponsePathElement;
-use crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::SequenceNode;
-use crate::plugins::telemetry::apollo_exporter::proto::trace::Details;
-use crate::plugins::telemetry::apollo_exporter::proto::trace::Http;
-use crate::plugins::telemetry::apollo_exporter::proto::trace::QueryPlanNode;
+use crate::plugins::telemetry::apollo_exporter::proto;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::trace::http::Values;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::trace::query_plan_node::FetchNode;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::trace::query_plan_node::FlattenNode;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::trace::query_plan_node::ParallelNode;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::trace::query_plan_node::ResponsePathElement;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::trace::query_plan_node::SequenceNode;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::trace::Details;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::trace::Http;
+use crate::plugins::telemetry::apollo_exporter::proto::reports::trace::QueryPlanNode;
 use crate::plugins::telemetry::apollo_exporter::ApolloExporter;
 use crate::plugins::telemetry::config;
 use crate::plugins::telemetry::config::Sampler;
@@ -99,7 +100,7 @@ pub(crate) struct Exporter {
 }
 
 enum TreeData {
-    Request(Result<Box<crate::plugins::telemetry::apollo_exporter::proto::Trace>, Error>),
+    Request(Result<Box<proto::reports::Trace>, Error>),
     Supergraph {
         http: Http,
         client_name: Option<String>,
@@ -107,7 +108,7 @@ enum TreeData {
         operation_signature: String,
     },
     QueryPlan(QueryPlanNode),
-    Trace(Result<Option<Box<crate::plugins::telemetry::apollo_exporter::proto::Trace>>, Error>),
+    Trace(Result<Option<Box<proto::reports::Trace>>, Error>),
 }
 
 #[buildstructor::buildstructor]
@@ -147,7 +148,7 @@ impl Exporter {
         &mut self,
         span: &SpanData,
         child_nodes: Vec<TreeData>,
-    ) -> Result<Box<crate::plugins::telemetry::apollo_exporter::proto::Trace>, Error> {
+    ) -> Result<Box<proto::reports::Trace>, Error> {
         let variables = span
             .attributes
             .get(&APOLLO_PRIVATE_GRAPHQL_VARIABLES)
@@ -166,7 +167,7 @@ impl Exporter {
 
         let http = self.extract_http_data(span);
 
-        let mut root_trace = crate::plugins::telemetry::apollo_exporter::proto::Trace {
+        let mut root_trace = proto::reports::Trace {
             start_time: Some(span.start_time.into()),
             end_time: Some(span.end_time.into()),
             duration_ns: span
@@ -210,10 +211,7 @@ impl Exporter {
         Ok(Box::new(root_trace))
     }
 
-    fn extract_trace(
-        &mut self,
-        span: SpanData,
-    ) -> Result<Box<crate::plugins::telemetry::apollo_exporter::proto::Trace>, Error> {
+    fn extract_trace(&mut self, span: SpanData) -> Result<Box<proto::reports::Trace>, Error> {
         self.extract_data_from_spans(&span, &span)?
             .pop()
             .and_then(|node| {
@@ -256,34 +254,30 @@ impl Exporter {
 
         Ok(match span.name.as_ref() {
             PARALLEL_SPAN_NAME => vec![TreeData::QueryPlan(QueryPlanNode {
-                node: Some(
-                    crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::Node::Parallel(
-                        ParallelNode {
-                            nodes: child_nodes
-                                .into_iter()
-                                .filter_map(|child| match child {
-                                    TreeData::QueryPlan(node) => Some(node),
-                                    _ => None,
-                                })
-                                .collect(),
-                        },
-                    ),
-                ),
+                node: Some(proto::reports::trace::query_plan_node::Node::Parallel(
+                    ParallelNode {
+                        nodes: child_nodes
+                            .into_iter()
+                            .filter_map(|child| match child {
+                                TreeData::QueryPlan(node) => Some(node),
+                                _ => None,
+                            })
+                            .collect(),
+                    },
+                )),
             })],
             SEQUENCE_SPAN_NAME => vec![TreeData::QueryPlan(QueryPlanNode {
-                node: Some(
-                    crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::Node::Sequence(
-                        SequenceNode {
-                            nodes: child_nodes
-                                .into_iter()
-                                .filter_map(|child| match child {
-                                    TreeData::QueryPlan(node) => Some(node),
-                                    _ => None,
-                                })
-                                .collect(),
-                        },
-                    ),
-                ),
+                node: Some(proto::reports::trace::query_plan_node::Node::Sequence(
+                    SequenceNode {
+                        nodes: child_nodes
+                            .into_iter()
+                            .filter_map(|child| match child {
+                                TreeData::QueryPlan(node) => Some(node),
+                                _ => None,
+                            })
+                            .collect(),
+                    },
+                )),
             })],
             FETCH_SPAN_NAME => {
                 let (trace_parsing_failed, trace) = match child_nodes.pop() {
@@ -299,28 +293,26 @@ impl Exporter {
                     .as_str())
                 .to_string();
                 vec![TreeData::QueryPlan(QueryPlanNode {
-                    node: Some(
-                        crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::Node::Fetch(Box::new(
-                            FetchNode {
-                                service_name,
-                                trace_parsing_failed,
-                                trace,
-                                sent_time_offset: span
-                                    .attributes
-                                    .get(&APOLLO_PRIVATE_SENT_TIME_OFFSET)
-                                    .and_then(Self::extract_i64)
-                                    .map(|f| f as u64)
-                                    .unwrap_or_default(),
-                                sent_time: Some(span.start_time.into()),
-                                received_time: Some(span.end_time.into()),
-                            },
-                        )),
-                    ),
+                    node: Some(proto::reports::trace::query_plan_node::Node::Fetch(
+                        Box::new(FetchNode {
+                            service_name,
+                            trace_parsing_failed,
+                            trace,
+                            sent_time_offset: span
+                                .attributes
+                                .get(&APOLLO_PRIVATE_SENT_TIME_OFFSET)
+                                .and_then(Self::extract_i64)
+                                .map(|f| f as u64)
+                                .unwrap_or_default(),
+                            sent_time: Some(span.start_time.into()),
+                            received_time: Some(span.end_time.into()),
+                        }),
+                    )),
                 })]
             }
             FLATTEN_SPAN_NAME => {
                 vec![TreeData::QueryPlan(QueryPlanNode {
-                    node: Some(crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::Node::Flatten(
+                    node: Some(proto::reports::trace::query_plan_node::Node::Flatten(
                         Box::new(FlattenNode {
                             response_path: span
                                 .attributes
@@ -329,9 +321,9 @@ impl Exporter {
                                 .map(|v| {
                                     v.split('/').filter(|v|!v.is_empty() && *v != "@").map(|v| {
                                         if let Ok(index) = v.parse::<u32>() {
-                                            ResponsePathElement { id: Some(crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::response_path_element::Id::Index(index))}
+                                            ResponsePathElement { id: Some(proto::reports::trace::query_plan_node::response_path_element::Id::Index(index))}
                                         } else {
-                                            ResponsePathElement { id: Some(crate::plugins::telemetry::apollo_exporter::proto::trace::query_plan_node::response_path_element::Id::FieldName(v.to_string())) }
+                                            ResponsePathElement { id: Some(proto::reports::trace::query_plan_node::response_path_element::Id::FieldName(v.to_string())) }
                                         }
                                     }).collect()
                                 }).unwrap_or_default(),
@@ -397,16 +389,14 @@ impl Exporter {
     fn find_ftv1_trace(
         &mut self,
         span: &SpanData,
-    ) -> Result<Option<Box<crate::plugins::telemetry::apollo_exporter::proto::Trace>>, Error> {
+    ) -> Result<Option<Box<proto::reports::Trace>>, Error> {
         span.attributes
             .get(&APOLLO_PRIVATE_FTV1)
             .map(|data| {
                 if let Value::String(data) = data {
-                    Ok(Box::new(
-                        crate::plugins::telemetry::apollo_exporter::proto::Trace::decode(
-                            Cursor::new(base64::decode(data.to_string())?),
-                        )?,
-                    ))
+                    Ok(Box::new(proto::reports::Trace::decode(Cursor::new(
+                        base64::decode(data.to_string())?,
+                    ))?))
                 } else {
                     Err(Error::Ftv1SpanAttribute)
                 }
@@ -422,26 +412,16 @@ impl Exporter {
             .unwrap_or_default()
             .as_ref()
         {
-            "OPTIONS" => {
-                crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Options
-            }
-            "GET" => crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Get,
-            "HEAD" => crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Head,
-            "POST" => crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Post,
-            "PUT" => crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Put,
-            "DELETE" => {
-                crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Delete
-            }
-            "TRACE" => {
-                crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Trace
-            }
-            "CONNECT" => {
-                crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Connect
-            }
-            "PATCH" => {
-                crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Patch
-            }
-            _ => crate::plugins::telemetry::apollo_exporter::proto::trace::http::Method::Unknown,
+            "OPTIONS" => proto::reports::trace::http::Method::Options,
+            "GET" => proto::reports::trace::http::Method::Get,
+            "HEAD" => proto::reports::trace::http::Method::Head,
+            "POST" => proto::reports::trace::http::Method::Post,
+            "PUT" => proto::reports::trace::http::Method::Put,
+            "DELETE" => proto::reports::trace::http::Method::Delete,
+            "TRACE" => proto::reports::trace::http::Method::Trace,
+            "CONNECT" => proto::reports::trace::http::Method::Connect,
+            "PATCH" => proto::reports::trace::http::Method::Patch,
+            _ => proto::reports::trace::http::Method::Unknown,
         };
         let headers = span
             .attributes
@@ -480,10 +460,7 @@ impl SpanExporter for Exporter {
         // We may get spans that simply don't complete. These need to be cleaned up after a period. It's the price of using ftv1.
 
         // Note that apollo-tracing won't really work with defer/stream/live queries. In this situation it's difficult to know when a request has actually finished.
-        let mut traces: Vec<(
-            String,
-            crate::plugins::telemetry::apollo_exporter::proto::Trace,
-        )> = Vec::new();
+        let mut traces: Vec<(String, proto::reports::Trace)> = Vec::new();
         for span in batch {
             if span.name == REQUEST_SPAN_NAME {
                 match self.extract_trace(span) {

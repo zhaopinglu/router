@@ -87,7 +87,7 @@ impl Default for Sender {
 pub(crate) struct ApolloExporter {
     endpoint: Url,
     apollo_key: String,
-    header: crate::plugins::telemetry::apollo_exporter::proto::ReportHeader,
+    header: proto::reports::ReportHeader,
     client: Client,
     strip_traces: Arc<Mutex<bool>>,
 }
@@ -99,7 +99,7 @@ impl ApolloExporter {
         apollo_graph_ref: &str,
         schema_id: &str,
     ) -> Result<ApolloExporter, BoxError> {
-        let header = crate::plugins::telemetry::apollo_exporter::proto::ReportHeader {
+        let header = proto::reports::ReportHeader {
             graph_ref: apollo_graph_ref.to_string(),
             hostname: hostname()?,
             agent_version: format!(
@@ -292,8 +292,10 @@ pub(crate) fn get_uname() -> Result<String, std::io::Error> {
 
 #[allow(unreachable_pub)]
 pub(crate) mod proto {
-    #![allow(clippy::derive_partial_eq_without_eq)]
-    tonic::include_proto!("report");
+    pub(crate) mod reports {
+        #![allow(clippy::derive_partial_eq_without_eq)]
+        tonic::include_proto!("report");
+    }
 }
 
 /// Reporting Error type
