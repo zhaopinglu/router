@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::num::NonZeroUsize;
 use std::time::SystemTimeError;
 
 use async_trait::async_trait;
@@ -120,12 +121,12 @@ impl Exporter {
         apollo_key: String,
         apollo_graph_ref: String,
         schema_id: String,
-        buffer_size: usize,
-        field_execution_sampler: Option<SamplerOption>,
+        buffer_size: NonZeroUsize,
+        field_execution_sampler: SamplerOption,
     ) -> Result<Self, BoxError> {
         tracing::debug!("creating studio exporter");
         Ok(Self {
-            spans_by_parent_id: LruCache::new(buffer_size),
+            spans_by_parent_id: LruCache::new(buffer_size.into()),
             trace_config,
             endpoint: endpoint.clone(),
             schema_id: schema_id.clone(),
@@ -136,10 +137,9 @@ impl Exporter {
                 &schema_id,
             )?,
             field_execution_weight: match field_execution_sampler {
-                Some(SamplerOption::Always(Sampler::AlwaysOn)) => 1.0,
-                Some(SamplerOption::Always(Sampler::AlwaysOff)) => 0.0,
-                Some(SamplerOption::TraceIdRatioBased(ratio)) => 1.0 / ratio,
-                None => 0.0,
+                SamplerOption::Always(Sampler::AlwaysOn) => 1.0,
+                SamplerOption::Always(Sampler::AlwaysOff) => 0.0,
+                SamplerOption::TraceIdRatioBased(ratio) => 1.0 / ratio,
             },
         })
     }

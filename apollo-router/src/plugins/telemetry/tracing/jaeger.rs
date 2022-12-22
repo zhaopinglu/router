@@ -27,7 +27,7 @@ pub(crate) struct Config {
 
     #[serde(default)]
     #[schemars(default)]
-    pub(crate) batch_processor: Option<BatchProcessorConfig>,
+    pub(crate) batch_processor: BatchProcessorConfig,
 }
 
 // This is needed because of the use of flatten.
@@ -75,10 +75,7 @@ fn default_agent_endpoint() -> &'static str {
 
 impl TracingConfigurator for Config {
     fn apply(&self, builder: Builder, trace_config: &Trace) -> Result<Builder, BoxError> {
-        tracing::info!(
-            "configuring Jaeger tracing: {}",
-            self.batch_processor.as_ref().cloned().unwrap_or_default()
-        );
+        tracing::info!("configuring Jaeger tracing: {}", self.batch_processor);
         let exporter = match &self.endpoint {
             Endpoint::Agent { endpoint } => {
                 let socket = match endpoint {
@@ -117,13 +114,7 @@ impl TracingConfigurator for Config {
 
         Ok(builder.with_span_processor(
             BatchSpanProcessor::builder(exporter, opentelemetry::runtime::Tokio)
-                .with_batch_config(
-                    self.batch_processor
-                        .as_ref()
-                        .cloned()
-                        .unwrap_or_default()
-                        .into(),
-                )
+                .with_batch_config(self.batch_processor.clone().into())
                 .build()
                 .filtered(),
         ))

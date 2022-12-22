@@ -298,34 +298,34 @@ impl Conf {
                 // Error conditions
                 (
                     Some(SamplerOption::TraceIdRatioBased(global_ratio)),
-                    Some(SamplerOption::TraceIdRatioBased(field_ratio)),
+                    SamplerOption::TraceIdRatioBased(field_ratio),
                 ) if field_ratio > global_ratio => {
                     Err(Error::InvalidFieldLevelInstrumentationSampler)?
                 }
                 (
                     Some(SamplerOption::Always(Sampler::AlwaysOff)),
-                    Some(SamplerOption::Always(Sampler::AlwaysOn)),
+                    SamplerOption::Always(Sampler::AlwaysOn),
                 ) => Err(Error::InvalidFieldLevelInstrumentationSampler)?,
                 (
                     Some(SamplerOption::Always(Sampler::AlwaysOff)),
-                    Some(SamplerOption::TraceIdRatioBased(ratio)),
+                    SamplerOption::TraceIdRatioBased(ratio),
                 ) if ratio != 0.0 => Err(Error::InvalidFieldLevelInstrumentationSampler)?,
                 (
                     Some(SamplerOption::TraceIdRatioBased(ratio)),
-                    Some(SamplerOption::Always(Sampler::AlwaysOn)),
+                    SamplerOption::Always(Sampler::AlwaysOn),
                 ) if ratio != 1.0 => Err(Error::InvalidFieldLevelInstrumentationSampler)?,
 
                 // Happy paths
-                (_, Some(SamplerOption::TraceIdRatioBased(ratio))) if ratio == 0.0 => 0.0,
+                (_, SamplerOption::TraceIdRatioBased(ratio)) if ratio == 0.0 => 0.0,
                 (Some(SamplerOption::TraceIdRatioBased(ratio)), _) if ratio == 0.0 => 0.0,
-                (_, Some(SamplerOption::Always(Sampler::AlwaysOn))) => 1.0,
+                (_, SamplerOption::Always(Sampler::AlwaysOn)) => 1.0,
                 (
                     Some(SamplerOption::TraceIdRatioBased(global_ratio)),
-                    Some(SamplerOption::TraceIdRatioBased(field_ratio)),
+                    SamplerOption::TraceIdRatioBased(field_ratio),
                 ) => field_ratio / global_ratio,
                 (
                     Some(SamplerOption::Always(Sampler::AlwaysOn)),
-                    Some(SamplerOption::TraceIdRatioBased(field_ratio)),
+                    SamplerOption::TraceIdRatioBased(field_ratio),
                 ) => field_ratio,
                 (_, _) => 0.0,
             },

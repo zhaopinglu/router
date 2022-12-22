@@ -184,7 +184,7 @@ impl Plugin for Telemetry {
             .cloned()
             .unwrap_or_default()
             .endpoint
-            == Some(Url::parse(ENDPOINT_INVALID).expect("Invalid endpoint must parse"))
+            == Url::parse(ENDPOINT_INVALID).expect("Invalid endpoint must parse")
         {
             return Err(BoxError::from(
                 "APOLLO_USAGE_REPORTING_INGRESS_URL was set, but was not a valid URL",

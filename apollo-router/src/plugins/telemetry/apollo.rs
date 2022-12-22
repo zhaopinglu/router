@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 #[cfg(not(test))]
 use std::env::VarError;
+use std::num::NonZeroUsize;
 use std::ops::AddAssign;
 use std::time::SystemTime;
 
@@ -38,9 +39,9 @@ pub(crate) const ENDPOINT_INVALID: &str = "https://invalid";
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     /// The Apollo Studio endpoint for exporting traces and metrics.
-    #[schemars(with = "Option<String>", default)]
+    #[schemars(with = "String", default = "endpoint_default")]
     #[serde(default = "endpoint_default")]
-    pub(crate) endpoint: Option<Url>,
+    pub(crate) endpoint: Url,
 
     /// The Apollo Studio API key.
     #[schemars(skip)]
@@ -70,12 +71,13 @@ pub(crate) struct Config {
 
     /// The buffer size for sending traces to Apollo. Increase this if you are experiencing lost traces.
     #[serde(default = "default_buffer_size")]
-    pub(crate) buffer_size: usize,
+    pub(crate) buffer_size: NonZeroUsize,
 
     /// Enable field level instrumentation for subgraphs via ftv1. ftv1 tracing can cause performance issues as it is transmitted in band with subgraph responses.
     /// 0.0 will result in no field level instrumentation. 1.0 will result in always instrumentation.
     /// Value MUST be less than global sampling rate
-    pub(crate) field_level_instrumentation_sampler: Option<SamplerOption>,
+    #[serde(default = "default_field_level_instrumentation_sampler")]
+    pub(crate) field_level_instrumentation_sampler: SamplerOption,
 
     /// To configure which request header names and values are included in trace data that's sent to Apollo Studio.
     #[serde(default)]
@@ -89,7 +91,7 @@ pub(crate) struct Config {
     #[schemars(skip)]
     pub(crate) schema_id: String,
 
-    pub(crate) batch_processor: Option<BatchProcessorConfig>,
+    pub(crate) batch_processor: BatchProcessorConfig,
 }
 
 #[cfg(test)]
@@ -114,32 +116,34 @@ fn apollo_graph_reference() -> Option<String> {
     std::env::var("APOLLO_GRAPH_REF").ok()
 }
 
+fn default_field_level_instrumentation_sampler() -> SamplerOption {
+    SamplerOption::TraceIdRatioBased(0.01)
+}
+
 #[cfg(test)]
-fn endpoint_default() -> Option<Url> {
-    Url::parse(ENDPOINT_DEFAULT)
-        .map(Some)
-        .expect("APOLLO_USAGE_REPORTING_INGRESS_URL is not valid")
+fn endpoint_default() -> Url {
+    Url::parse(ENDPOINT_DEFAULT).expect("APOLLO_USAGE_REPORTING_INGRESS_URL is not valid")
 }
 
 #[cfg(not(test))]
-fn endpoint_default() -> Option<Url> {
+fn endpoint_default() -> Url {
     match std::env::var("APOLLO_USAGE_REPORTING_INGRESS_URL") {
         Ok(v) => match Url::parse(&v) {
-            Ok(url) => Some(url),
+            Ok(url) => url,
             Err(e) => {
                 tracing::error!("APOLLO_USAGE_REPORTING_INGRESS_URL is not valid: {}", e);
-                Some(Url::parse(ENDPOINT_INVALID).expect("invalid endpoint URL must be parseable"))
+                Url::parse(ENDPOINT_INVALID).expect("invalid endpoint URL must be parseable")
             }
         },
         Err(VarError::NotPresent) => {
-            Some(Url::parse(ENDPOINT_DEFAULT).expect("default endpoint URL must be parseable"))
+            Url::parse(ENDPOINT_DEFAULT).expect("default endpoint URL must be parseable")
         }
         Err(e) => {
             tracing::error!(
                 "APOLLO_USAGE_REPORTING_INGRESS_URL could not be read: {}",
                 e
             );
-            None
+            Url::parse(ENDPOINT_DEFAULT).expect("default endpoint URL must be parseable")
         }
     }
 }
@@ -160,26 +164,25 @@ const fn client_version_header_default() -> HeaderName {
     HeaderName::from_static(client_version_header_default_str())
 }
 
-pub(crate) const fn default_buffer_size() -> usize {
-    10000
+pub(crate) const fn default_buffer_size() -> NonZeroUsize {
+    unsafe { NonZeroUsize::new_unchecked(10000) }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            endpoint: Some(
-                Url::parse(ENDPOINT_DEFAULT).expect("default endpoint URL must be parseable"),
-            ),
+            endpoint: Url::parse(ENDPOINT_DEFAULT).expect("default endpoint URL must be parseable"),
+
             apollo_key: None,
             apollo_graph_ref: None,
             client_name_header: client_name_header_default(),
             client_version_header: client_version_header_default(),
             schema_id: "<no_schema_id>".to_string(),
             buffer_size: default_buffer_size(),
-            field_level_instrumentation_sampler: Some(SamplerOption::TraceIdRatioBased(0.01)),
+            field_level_instrumentation_sampler: default_field_level_instrumentation_sampler(),
             send_headers: ForwardHeaders::None,
             send_variable_values: ForwardValues::None,
-            batch_processor: Some(BatchProcessorConfig::default()),
+            batch_processor: BatchProcessorConfig::default(),
         }
     }
 }
