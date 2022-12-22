@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use futures::future::join_all;
 use futures::prelude::*;
+use opentelemetry::trace::SpanKind;
 use tokio::sync::broadcast::Sender;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::Instrument;
@@ -130,7 +131,7 @@ impl PlanNode {
                     }
                     .instrument(tracing::info_span!(
                         SEQUENCE_SPAN_NAME,
-                        "otel.kind" = "INTERNAL"
+                        "otel.kind" = ?SpanKind::Internal
                     ))
                     .await
                 }
@@ -159,7 +160,7 @@ impl PlanNode {
                     }
                     .instrument(tracing::info_span!(
                         PARALLEL_SPAN_NAME,
-                        "otel.kind" = "INTERNAL"
+                        "otel.kind" = ?SpanKind::Internal
                     ))
                     .await
                 }
@@ -174,7 +175,7 @@ impl PlanNode {
                             parent_value,
                             sender,
                         )
-                        .instrument(tracing::info_span!(FLATTEN_SPAN_NAME, "graphql.path" = %current_dir, "otel.kind" = "INTERNAL"))
+                        .instrument(tracing::info_span!(FLATTEN_SPAN_NAME, "graphql.path" = %current_dir, "otel.kind" = ?SpanKind::Internal))
                         .await;
 
                     value = v;
@@ -188,7 +189,7 @@ impl PlanNode {
                         .fetch_node(parameters, parent_value, current_dir)
                         .instrument(tracing::info_span!(
                             FETCH_SPAN_NAME,
-                            "otel.kind" = "INTERNAL",
+                            "otel.kind" = ?SpanKind::Internal,
                             "apollo.subgraph.name" = fetch_node.service_name.as_str(),
                             "apollo_private.sent_time_offset" = fetch_time_offset
                         ))
@@ -260,7 +261,7 @@ impl PlanNode {
                                 )
                                 .instrument(tracing::info_span!(
                                     DEFER_PRIMARY_SPAN_NAME,
-                                    "otel.kind" = "INTERNAL"
+                                    "otel.kind" = ?SpanKind::Internal
                                 ))
                                 .await;
                             value.deep_merge(v);
@@ -275,7 +276,7 @@ impl PlanNode {
                     }
                     .instrument(tracing::info_span!(
                         DEFER_SPAN_NAME,
-                        "otel.kind" = "INTERNAL"
+                        "otel.kind" = ?SpanKind::Internal
                     ))
                     .await
                 }
@@ -313,7 +314,7 @@ impl PlanNode {
                                     )
                                     .instrument(tracing::info_span!(
                                         CONDITION_IF_SPAN_NAME,
-                                        "otel.kind" = "INTERNAL"
+                                        "otel.kind" = ?SpanKind::Internal
                                     ))
                                     .await;
                                 value.deep_merge(v);
@@ -330,7 +331,7 @@ impl PlanNode {
                                 )
                                 .instrument(tracing::info_span!(
                                     CONDITION_ELSE_SPAN_NAME,
-                                    "otel.kind" = "INTERNAL"
+                                    "otel.kind" = ?SpanKind::Internal
                                 ))
                                 .await;
                             value.deep_merge(v);
@@ -341,7 +342,7 @@ impl PlanNode {
                     .instrument(tracing::info_span!(
                         CONDITION_SPAN_NAME,
                         "graphql.condition" = condition,
-                        "otel.kind" = "INTERNAL"
+                        "otel.kind" = ?SpanKind::Internal
                     ))
                     .await
                 }
@@ -447,7 +448,7 @@ impl DeferredNode {
                         "graphql.label" = label,
                         "graphql.depends" = depends_json,
                         "graphql.path" = deferred_path.to_string(),
-                        "otel.kind" = "INTERNAL"
+                        "otel.kind" = ?SpanKind::Internal
                     ))
                     .await;
 

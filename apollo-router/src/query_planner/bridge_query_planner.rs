@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
+use opentelemetry::trace::SpanKind;
 use router_bridge::planner::IncrementalDeliverySupport;
 use router_bridge::planner::PlanSuccess;
 use router_bridge::planner::Planner;
@@ -72,7 +73,7 @@ impl BridgeQueryPlanner {
         let configuration = self.configuration.clone();
         let query_parsing_future =
             tokio::task::spawn_blocking(move || Query::parse(query, &schema, &configuration))
-                .instrument(tracing::info_span!("parse_query", "otel.kind" = "INTERNAL"));
+                .instrument(tracing::info_span!("parse_query", "otel.kind" = ?SpanKind::Internal));
         match query_parsing_future.await {
             Ok(res) => res.map_err(QueryPlannerError::from),
             Err(err) => {

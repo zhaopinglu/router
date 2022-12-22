@@ -11,6 +11,7 @@ use http::header::CONTENT_ENCODING;
 use http::Request;
 use hyper::Body;
 use opentelemetry::global;
+use opentelemetry::trace::SpanKind;
 use opentelemetry::trace::TraceContextExt;
 use tokio::io::AsyncWriteExt;
 use tower_http::trace::MakeSpan;
@@ -117,7 +118,7 @@ impl<B> MakeSpan<B> for PropagatingMakeSpan {
                 "http.method" = %request.method(),
                 "http.route" = %request.uri(),
                 "http.flavor" = ?request.version(),
-                "otel.kind" = "SERVER",
+                "otel.kind" = ?SpanKind::Server,
 
             )
         } else {
@@ -128,7 +129,7 @@ impl<B> MakeSpan<B> for PropagatingMakeSpan {
                 "http.method" = %request.method(),
                 "http.route" = %request.uri(),
                 "http.flavor" = ?request.version(),
-                "otel.kind" = "SERVER",
+                "otel.kind" = ?SpanKind::Server,
             )
         }
     }

@@ -262,7 +262,7 @@ async fn plan_query(
                 .expect("the query presence was already checked by a plugin")
                 .as_str(),
             graphql.operation.name = body.operation_name.clone().unwrap_or_default().as_str(),
-            "otel.kind" = "INTERNAL"
+            "otel.kind" = ?SpanKind::Internal
         ))
         .await
 }

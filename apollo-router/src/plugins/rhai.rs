@@ -31,6 +31,7 @@ use notify::EventKind;
 use notify::PollWatcher;
 use notify::RecursiveMode;
 use notify::Watcher;
+use opentelemetry::trace::SpanKind;
 use rhai::module_resolvers::FileModuleResolver;
 use rhai::plugin::*;
 use rhai::serde::from_dynamic;
@@ -602,7 +603,7 @@ macro_rules! gen_map_request {
                     tracing::info_span!(
                         "rhai plugin",
                         "rhai service" = stringify!($base::Request),
-                        "otel.kind" = "INTERNAL"
+                        "otel.kind" = ?SpanKind::Internal
                     )
                 }
             }
@@ -667,7 +668,7 @@ macro_rules! gen_map_deferred_request {
                     tracing::info_span!(
                         "rhai plugin",
                         "rhai service" = stringify!($request),
-                        "otel.kind" = "INTERNAL"
+                        "otel.kind" = ?SpanKind::Internal
                     )
                 }
             }

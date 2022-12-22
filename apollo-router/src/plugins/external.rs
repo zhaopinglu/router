@@ -299,7 +299,7 @@ impl Plugin for ExternalPlugin {
                 tracing::info_span!(
                     EXTERNAL_SPAN_NAME,
                     "external service" = stringify!(router::Request),
-                    "otel.kind" = "INTERNAL"
+                    "otel.kind" = ?SpanKind::Internal
                 )
             }
         }

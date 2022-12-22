@@ -38,6 +38,7 @@ use opentelemetry::sdk::propagation::TraceContextPropagator;
 use opentelemetry::sdk::trace::Builder;
 use opentelemetry::trace::SpanContext;
 use opentelemetry::trace::SpanId;
+use opentelemetry::trace::SpanKind;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceFlags;
 use opentelemetry::trace::TraceState;
@@ -252,7 +253,7 @@ impl Plugin for Telemetry {
                     "trace_id" = %trace_id,
                     "client.name" = client_name.to_str().unwrap_or_default(),
                     "client.version" = client_version.to_str().unwrap_or_default(),
-                    "otel.kind" = "INTERNAL",
+                    "otel.kind" = ?SpanKind::Internal,
                     "otel.status_code" = ::tracing::field::Empty,
                     "apollo_private.duration_ns" = ::tracing::field::Empty,
                     "apollo_private.http.request_headers" = Self::filter_headers(request.router_request.headers(), &apollo.send_headers).as_str(),
@@ -383,7 +384,7 @@ impl Plugin for Telemetry {
     fn execution_service(&self, service: execution::BoxService) -> execution::BoxService {
         ServiceBuilder::new()
             .instrument(move |_req: &ExecutionRequest| {
-                info_span!("execution", "otel.kind" = "INTERNAL",)
+                info_span!("execution", "otel.kind" = ?SpanKind::Internal,)
             })
             .service(service)
             .boxed()
@@ -416,7 +417,7 @@ impl Plugin for Telemetry {
                     "apollo.subgraph.name" = name.as_str(),
                     graphql.document = query.as_str(),
                     graphql.operation.name = operation_name.as_str(),
-                    "otel.kind" = "INTERNAL",
+                    "otel.kind" = ?SpanKind::Internal,
                     "apollo_private.ftv1" = field::Empty
                 )
             })
@@ -730,7 +731,7 @@ impl Telemetry {
                 graphql.document = query.as_str(),
                 // TODO add graphql.operation.type
                 graphql.operation.name = operation_name.as_str(),
-                otel.kind = "INTERNAL",
+                otel.kind = ?SpanKind::Internal,
                 apollo_private.field_level_instrumentation_ratio =
                     field_level_instrumentation_ratio,
                 apollo_private.operation_signature = field::Empty,
