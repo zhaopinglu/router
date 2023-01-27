@@ -196,7 +196,7 @@ where
                         router_service_factory,
                         server_handle,
                     },
-                    UpdateConfiguration(new_configuration),
+                    UpdateConfiguration(mut new_configuration),
                 ) => {
                     tracing::info!("reloading configuration");
                     if let Err(e) = configuration.is_compatible(&new_configuration) {
@@ -209,6 +209,8 @@ where
                             server_handle,
                         }
                     } else {
+                        // we keep the same notification instance during reloads
+                        new_configuration.notify = configuration.notify.clone();
                         self.reload_server(
                             configuration,
                             schema,

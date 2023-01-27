@@ -59,6 +59,7 @@ mod http_ext;
 mod http_server_factory;
 mod introspection;
 pub mod layers;
+pub(crate) mod notification;
 mod orbiter;
 mod plugins;
 mod query_planner;

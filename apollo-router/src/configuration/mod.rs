@@ -41,6 +41,7 @@ pub(crate) use self::schema::generate_upgrade;
 use crate::cache::DEFAULT_CACHE_CAPACITY;
 use crate::configuration::schema::Mode;
 use crate::executable::APOLLO_ROUTER_DEV_ENV;
+use crate::notification::Notify;
 use crate::plugin::plugins;
 
 static SUPERGRAPH_ENDPOINT_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -128,6 +129,9 @@ pub struct Configuration {
     #[serde(default)]
     #[serde(flatten)]
     pub(crate) apollo_plugins: ApolloPlugins,
+
+    #[serde(default, skip_serializing, skip_deserializing)]
+    pub(crate) notify: Notify,
 }
 
 impl<'de> serde::Deserialize<'de> for Configuration {
@@ -211,6 +215,7 @@ impl Configuration {
                 plugins: apollo_plugins,
             },
             tls: tls.unwrap_or_default(),
+            notify: Notify::new(),
         };
         if dev.unwrap_or_default()
             || std::env::var(APOLLO_ROUTER_DEV_ENV).ok().as_deref() == Some("true")
@@ -341,6 +346,7 @@ impl Configuration {
                 plugins: apollo_plugins,
             },
             tls: tls.unwrap_or_default(),
+            notify: Notify::new(),
         };
         if dev.unwrap_or_default()
             || std::env::var(APOLLO_ROUTER_DEV_ENV).ok().as_deref() == Some("true")
@@ -510,6 +516,9 @@ pub(crate) struct Supergraph {
     /// Set to false to disable defer support
     pub(crate) defer_support: bool,
 
+    /// Enable/disable the subscription support
+    pub(crate) experimental_subscription_support: SubscriptionConf,
+
     /// Configures automatic persisted queries
     pub(crate) apq: Apq,
 
@@ -531,12 +540,15 @@ impl Supergraph {
         defer_support: Option<bool>,
         apq: Option<Apq>,
         query_planning: Option<QueryPlanning>,
+        experimental_subscription_support: Option<SubscriptionConf>,
     ) -> Self {
         Self {
             listen: listen.unwrap_or_else(default_graphql_listen),
             path: path.unwrap_or_else(default_graphql_path),
             introspection: introspection.unwrap_or_else(default_graphql_introspection),
             defer_support: defer_support.unwrap_or_else(default_defer_support),
+            experimental_subscription_support: experimental_subscription_support
+                .unwrap_or_default(),
             apq: apq.unwrap_or_default(),
             query_planning: query_planning.unwrap_or_default(),
         }
@@ -554,12 +566,15 @@ impl Supergraph {
         defer_support: Option<bool>,
         apq: Option<Apq>,
         query_planning: Option<QueryPlanning>,
+        experimental_subscription_support: Option<SubscriptionConf>,
     ) -> Self {
         Self {
             listen: listen.unwrap_or_else(test_listen),
             path: path.unwrap_or_else(default_graphql_path),
             introspection: introspection.unwrap_or_else(default_graphql_introspection),
             defer_support: defer_support.unwrap_or_else(default_defer_support),
+            experimental_subscription_support: experimental_subscription_support
+                .unwrap_or_default(),
             apq: apq.unwrap_or_default(),
             query_planning: query_planning.unwrap_or_default(),
         }
@@ -586,6 +601,32 @@ impl Supergraph {
         }
 
         path
+    }
+}
+
+/// Subscription configuration
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SubscriptionConf {
+    /// Enable subscription support (default: false)
+    enabled: bool,
+    /// Choose which mode for subscription
+    mode: SubscriptionMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SubscriptionMode {
+    /// Using a callback url
+    Callback { public_url: String },
+    /// Using websocket to directly connect to subgraph
+    Passthrough,
+}
+
+impl Default for SubscriptionMode {
+    fn default() -> Self {
+        // TODO change this default ?
+        Self::Passthrough
     }
 }
 

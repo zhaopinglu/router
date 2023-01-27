@@ -28,6 +28,7 @@ use crate::json_ext::Object;
 use crate::json_ext::Path;
 use crate::json_ext::PathElement;
 use crate::json_ext::ValueExt;
+use crate::notification::Notify;
 use crate::services::execution;
 use crate::services::ExecutionRequest;
 use crate::services::ExecutionResponse;
@@ -38,6 +39,7 @@ use crate::spec::Schema;
 pub(crate) struct ExecutionService {
     pub(crate) schema: Arc<Schema>,
     pub(crate) subgraph_service_factory: Arc<SubgraphServiceFactory>,
+    pub(crate) notify: Notify,
 }
 
 impl Service<ExecutionRequest> for ExecutionService {
@@ -71,8 +73,11 @@ impl Service<ExecutionRequest> for ExecutionService {
             let is_deferred = req
                 .query_plan
                 .is_deferred(operation_name.as_deref(), &variables);
+            let is_subscription = req
+                .query_plan
+                .is_subscription(operation_name.as_deref());
 
-            let first = req
+            let mut first = req
                 .query_plan
                 .execute(
                     &context,
@@ -80,12 +85,19 @@ impl Service<ExecutionRequest> for ExecutionService {
                     &Arc::new(req.supergraph_request),
                     &this.schema,
                     sender,
+                    this.notify.clone(),
                 )
                 .await;
 
             let query = req.query_plan.query.clone();
-            let stream = if is_deferred {
-                filter_stream(first, receiver).boxed()
+            let stream = if is_deferred || is_subscription {
+                let stream_mode = if is_deferred {
+                    StreamMode::Defer
+                } else {
+                    first.subscribed = Some(true);
+                    StreamMode::Subscription
+                };
+                filter_stream(first, receiver, stream_mode).boxed()
             } else {
                 once(ready(first)).chain(receiver).boxed()
             };
@@ -121,6 +133,10 @@ impl Service<ExecutionRequest> for ExecutionService {
                     });
 
                     match (response.path.as_ref(), response.data.as_ref()) {
+                        // For subscription we don't provide a path
+                        (None, Some(_)) => {
+                            ready(Some(response))
+                        }
                         (None, _) | (_, None) => {
                             if is_deferred {
                                 response.has_next = Some(has_next);
@@ -262,24 +278,37 @@ impl Service<ExecutionRequest> for ExecutionService {
     }
 }
 
-// modifies the response stream to set `has_next` to `false` on the last response
-fn filter_stream(first: Response, mut stream: Receiver<Response>) -> Receiver<Response> {
+#[derive(Clone, Copy)]
+enum StreamMode {
+    Defer,
+    Subscription,
+}
+
+// modifies the response stream to set `has_next` to `false` and `subscribed` to `false` on the last response
+fn filter_stream(
+    first: Response,
+    mut stream: Receiver<Response>,
+    stream_mode: StreamMode,
+) -> Receiver<Response> {
     let (mut sender, receiver) = futures::channel::mpsc::channel(10);
 
     tokio::task::spawn(async move {
-        let mut seen_last_message = consume_responses(first, &mut stream, &mut sender).await?;
+        let mut seen_last_message =
+            consume_responses(first, &mut stream, &mut sender, stream_mode).await?;
 
         while let Some(current_response) = stream.next().await {
             seen_last_message =
-                consume_responses(current_response, &mut stream, &mut sender).await?;
+                consume_responses(current_response, &mut stream, &mut sender, stream_mode).await?;
         }
 
         // the response stream disconnected early so we could not add `has_next = false` to the
         // last message, so we add an empty one
         if !seen_last_message {
-            sender
-                .send(Response::builder().has_next(false).build())
-                .await?;
+            let res = match stream_mode {
+                StreamMode::Defer => Response::builder().has_next(false).build(),
+                StreamMode::Subscription => Response::builder().subscribed(false).build(),
+            };
+            sender.send(res).await?;
         }
         Ok::<_, SendError>(())
     });
@@ -292,6 +321,7 @@ async fn consume_responses(
     mut current_response: Response,
     stream: &mut Receiver<Response>,
     sender: &mut Sender<Response>,
+    stream_mode: StreamMode,
 ) -> Result<bool, SendError> {
     loop {
         match stream.try_next() {
@@ -313,7 +343,10 @@ async fn consume_responses(
             // there will be no other deferred responses after that,
             // so we set `has_next` to `false`
             Ok(None) => {
-                current_response.has_next = Some(false);
+                match stream_mode {
+                    StreamMode::Defer => current_response.has_next = Some(false),
+                    StreamMode::Subscription => current_response.subscribed = Some(false),
+                }
 
                 sender.send(current_response).await?;
                 return Ok(true);
@@ -327,6 +360,7 @@ pub(crate) struct ExecutionServiceFactory {
     pub(crate) schema: Arc<Schema>,
     pub(crate) plugins: Arc<Plugins>,
     pub(crate) subgraph_service_factory: Arc<SubgraphServiceFactory>,
+    pub(crate) notify: Notify,
 }
 
 impl ServiceFactory<ExecutionRequest> for ExecutionServiceFactory {
@@ -340,6 +374,7 @@ impl ServiceFactory<ExecutionRequest> for ExecutionServiceFactory {
                     crate::services::execution_service::ExecutionService {
                         schema: self.schema.clone(),
                         subgraph_service_factory: self.subgraph_service_factory.clone(),
+                        notify: self.notify.clone(),
                     }
                     .boxed(),
                     |acc, (_, e)| e.execution_service(acc),

@@ -17,7 +17,8 @@ use tower_service::Service;
 use tracing_futures::Instrument;
 
 use super::layers::content_negociation;
-use super::layers::content_negociation::ACCEPTS_MULTIPART_CONTEXT_KEY;
+use super::layers::content_negociation::ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY;
+use super::layers::content_negociation::ACCEPTS_MULTIPART_SUBSCRIPTION_CONTEXT_KEY;
 use super::new_service::ServiceFactory;
 use super::subgraph_service::MakeSubgraphService;
 use super::subgraph_service::SubgraphServiceFactory;
@@ -28,6 +29,7 @@ use crate::error::ServiceBuildError;
 use crate::graphql;
 use crate::graphql::IntoGraphQLErrors;
 use crate::introspection::Introspection;
+use crate::notification::Notify;
 #[cfg(test)]
 use crate::plugin::test::MockSupergraphService;
 use crate::plugin::DynPlugin;
@@ -185,13 +187,22 @@ where
         Some(QueryPlannerContent::Plan { plan }) => {
             let operation_name = body.operation_name.clone();
             let is_deferred = plan.is_deferred(operation_name.as_deref(), &variables);
+            let is_subscription = plan.is_subscription(operation_name.as_deref());
 
-            let accepts_multipart: bool = context
-                .get(ACCEPTS_MULTIPART_CONTEXT_KEY)
+            // TODO change the accept multipart because for now it's the multipart defer spec
+            let accepts_multipart_defer: bool = context
+                .get(ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY)
+                .unwrap_or_default()
+                .unwrap_or_default();
+            let accepts_multipart_subscription: bool = context
+                .get(ACCEPTS_MULTIPART_SUBSCRIPTION_CONTEXT_KEY)
                 .unwrap_or_default()
                 .unwrap_or_default();
 
-            if is_deferred && !accepts_multipart {
+            if (is_deferred || is_subscription)
+                && !accepts_multipart_defer
+                && !accepts_multipart_subscription
+            {
                 let mut response = SupergraphResponse::new_from_graphql_response(graphql::Response::builder()
                     .errors(vec![crate::error::Error::builder()
                         .message(String::from("the router received a query with the @defer directive but the client does not accept multipart/mixed HTTP responses. To enable @defer support, add the HTTP header 'Accept: multipart/mixed; deferSpec=20220824'"))
@@ -355,6 +366,7 @@ impl PluggableSupergraphServiceBuilder {
             subgraph_service_factory,
             schema: self.schema,
             plugins,
+            notify: configuration.notify.clone(),
         })
     }
 }
@@ -388,6 +400,7 @@ pub(crate) struct SupergraphCreator {
     subgraph_service_factory: Arc<SubgraphServiceFactory>,
     schema: Arc<Schema>,
     plugins: Arc<Plugins>,
+    notify: Notify,
 }
 
 pub(crate) trait HasPlugins {
@@ -422,6 +435,7 @@ impl SupergraphCreator {
                 schema: self.schema.clone(),
                 plugins: self.plugins.clone(),
                 subgraph_service_factory: self.subgraph_service_factory.clone(),
+                notify: self.notify.clone(),
             })
             .schema(self.schema.clone())
             .build();
@@ -1541,7 +1555,9 @@ mod tests {
 
     fn defer_context() -> Context {
         let context = Context::new();
-        context.insert(ACCEPTS_MULTIPART_CONTEXT_KEY, true).unwrap();
+        context
+            .insert(ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY, true)
+            .unwrap();
         context
     }
 }

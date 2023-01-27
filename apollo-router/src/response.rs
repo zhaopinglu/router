@@ -41,6 +41,9 @@ pub struct Response {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub has_next: Option<bool>,
 
+    #[serde(skip, default)]
+    pub subscribed: Option<bool>,
+
     #[serde(skip_serializing)]
     pub subselection: Option<String>,
 
@@ -61,6 +64,7 @@ impl Response {
         extensions: Map<ByteString, Value>,
         subselection: Option<String>,
         has_next: Option<bool>,
+        subscribed: Option<bool>,
         incremental: Vec<IncrementalResponse>,
     ) -> Self {
         Self {
@@ -71,6 +75,7 @@ impl Response {
             extensions,
             subselection,
             has_next,
+            subscribed,
             incremental,
         }
     }
@@ -162,6 +167,7 @@ impl Response {
             extensions,
             subselection: None,
             has_next,
+            subscribed: None,
             incremental,
         })
     }

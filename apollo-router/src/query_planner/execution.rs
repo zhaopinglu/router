@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::future::join_all;
 use futures::prelude::*;
 use tokio::sync::broadcast::Sender;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::Instrument;
+use uuid::Uuid;
 
 use super::log;
 use super::DeferredNode;
@@ -17,7 +19,9 @@ use crate::graphql::Response;
 use crate::json_ext::Path;
 use crate::json_ext::Value;
 use crate::json_ext::ValueExt;
+use crate::notification::Notify;
 use crate::query_planner::FlattenNode;
+use crate::query_planner::OperationKind;
 use crate::query_planner::Primary;
 use crate::query_planner::CONDITION_ELSE_SPAN_NAME;
 use crate::query_planner::CONDITION_IF_SPAN_NAME;
@@ -34,6 +38,8 @@ use crate::spec::Query;
 use crate::spec::Schema;
 use crate::Context;
 
+pub(crate) const SUBSCRIPTION_ID_KEY_CONTEXT: &str = "query_plan::subscription_id";
+
 impl QueryPlan {
     /// Execute the plan and return a [`Response`].
     pub(crate) async fn execute<'a>(
@@ -43,6 +49,7 @@ impl QueryPlan {
         supergraph_request: &'a Arc<http::Request<Request>>,
         schema: &'a Arc<Schema>,
         sender: futures::channel::mpsc::Sender<Response>,
+        notify: Notify,
     ) -> Response {
         let root = Path::empty();
 
@@ -62,6 +69,7 @@ impl QueryPlan {
                 &root,
                 &Value::default(),
                 sender,
+                notify,
             )
             .await;
 
@@ -93,7 +101,8 @@ impl PlanNode {
         parameters: &'a ExecutionParameters<'a>,
         current_dir: &'a Path,
         parent_value: &'a Value,
-        sender: futures::channel::mpsc::Sender<Response>,
+        mut sender: futures::channel::mpsc::Sender<Response>,
+        mut notify: Notify,
     ) -> future::BoxFuture<(Value, Option<String>, Vec<Error>)> {
         Box::pin(async move {
             tracing::trace!("executing plan:\n{:#?}", self);
@@ -113,6 +122,7 @@ impl PlanNode {
                                     current_dir,
                                     &value,
                                     sender.clone(),
+                                    notify.clone(),
                                 )
                                 .in_current_span()
                                 .await;
@@ -139,6 +149,7 @@ impl PlanNode {
                                     current_dir,
                                     parent_value,
                                     sender.clone(),
+                                    notify.clone(),
                                 )
                                 .in_current_span()
                             })
@@ -166,6 +177,7 @@ impl PlanNode {
                             &current_dir,
                             parent_value,
                             sender,
+                            notify,
                         )
                         .instrument(tracing::info_span!(FLATTEN_SPAN_NAME, "graphql.path" = %current_dir, "otel.kind" = "INTERNAL"))
                         .await;
@@ -175,26 +187,58 @@ impl PlanNode {
                     subselection = subselect;
                 }
                 PlanNode::Fetch(fetch_node) => {
-                    let fetch_time_offset =
-                        parameters.context.created_at.elapsed().as_nanos() as i64;
-                    match fetch_node
-                        .fetch_node(parameters, parent_value, current_dir)
-                        .instrument(tracing::info_span!(
-                            FETCH_SPAN_NAME,
-                            "otel.kind" = "INTERNAL",
-                            "apollo.subgraph.name" = fetch_node.service_name.as_str(),
-                            "apollo_private.sent_time_offset" = fetch_time_offset
-                        ))
-                        .await
-                    {
-                        Ok((v, e)) => {
-                            value = v;
-                            errors = e;
-                        }
-                        Err(err) => {
-                            failfast_error!("Fetch error: {}", err);
-                            errors = vec![err.to_graphql_error(Some(current_dir.to_owned()))];
-                            value = Value::default();
+                    if let OperationKind::Subscription = fetch_node.operation_kind() {
+                        let subscription_id = Uuid::new_v4();
+                        let _ = parameters
+                            .context
+                            .insert(SUBSCRIPTION_ID_KEY_CONTEXT, subscription_id);
+                        let _ = notify.subscribe(subscription_id).await;
+                        dbg!(subscription_id);
+
+                        // Do the callback
+
+                        // Generate sub id
+                        // add it in pub sub with query_plan
+                        //
+                        // Send callback
+                        // TODO in the future it should be a SubscriptionNode
+                        // TODO mock a sub
+                        // tokio::task::spawn(async move {
+
+                        //     for _ in 0..5 {
+                        //         tokio::time::sleep(Duration::from_millis(2000)).await;
+                        //         let val =
+                        //             serde_json_bytes::json!({"userWasCreated": {"name": "ok"}});
+                        //         sender
+                        //             .send(Response::builder().data(val).subscribed(true).build())
+                        //             .await;
+                        //     }
+                        // });
+
+                        value = Value::default();
+                        errors = vec![];
+                    } else {
+                        let fetch_time_offset =
+                            parameters.context.created_at.elapsed().as_nanos() as i64;
+                        match fetch_node
+                            .fetch_node(parameters, parent_value, current_dir)
+                            .instrument(tracing::info_span!(
+                                FETCH_SPAN_NAME,
+                                "otel.kind" = "INTERNAL",
+                                "apollo.subgraph.name" = fetch_node.service_name.as_str(),
+                                "apollo_private.sent_time_offset" = fetch_time_offset
+                            ))
+                            .await
+                        {
+                            Ok((v, e)) => {
+                                value = v;
+                                errors = e;
+                            }
+                            Err(err) => {
+                                failfast_error!("Fetch error: {}", err);
+                                errors = vec![err.to_graphql_error(Some(current_dir.to_owned()))];
+                                value = Value::default();
+                            }
                         }
                     }
                 }
@@ -223,6 +267,7 @@ impl PlanNode {
                                     parameters,
                                     parent_value,
                                     sender.clone(),
+                                    notify.clone(),
                                     &primary_sender,
                                     &mut deferred_fetches,
                                 )
@@ -249,6 +294,7 @@ impl PlanNode {
                                     current_dir,
                                     &value,
                                     sender,
+                                    notify,
                                 )
                                 .instrument(tracing::info_span!(
                                     DEFER_PRIMARY_SPAN_NAME,
@@ -302,6 +348,7 @@ impl PlanNode {
                                         current_dir,
                                         parent_value,
                                         sender.clone(),
+                                        notify.clone(),
                                     )
                                     .instrument(tracing::info_span!(
                                         CONDITION_IF_SPAN_NAME,
@@ -319,6 +366,7 @@ impl PlanNode {
                                     current_dir,
                                     parent_value,
                                     sender.clone(),
+                                    notify.clone(),
                                 )
                                 .instrument(tracing::info_span!(
                                     CONDITION_ELSE_SPAN_NAME,
@@ -350,6 +398,7 @@ impl DeferredNode {
         parameters: &'a ExecutionParameters<'a>,
         parent_value: &Value,
         sender: futures::channel::mpsc::Sender<Response>,
+        notify: Notify,
         primary_sender: &Sender<(Value, Vec<Error>)>,
         deferred_fetches: &mut HashMap<String, Sender<(Value, Vec<Error>)>>,
     ) -> impl Future<Output = ()> {
@@ -428,6 +477,7 @@ impl DeferredNode {
                         &Path::default(),
                         &value,
                         tx.clone(),
+                        notify.clone(),
                     )
                     .instrument(tracing::info_span!(
                         DEFER_DEFERRED_SPAN_NAME,

@@ -57,6 +57,13 @@ impl QueryPlan {
     pub(crate) fn is_deferred(&self, operation: Option<&str>, variables: &Object) -> bool {
         self.root.is_deferred(operation, variables, &self.query)
     }
+
+    pub(crate) fn is_subscription(&self, operation: Option<&str>) -> bool {
+        match self.query.operation(operation) {
+            Some(op) => matches!(op.kind(), OperationKind::Subscription),
+            None => false,
+        }
+    }
 }
 
 /// Query plans are composed of a set of nodes.

@@ -1101,7 +1101,7 @@ impl Query {
         })
     }
 
-    fn operation(&self, operation_name: Option<&str>) -> Option<&Operation> {
+    pub(crate) fn operation(&self, operation_name: Option<&str>) -> Option<&Operation> {
         match operation_name {
             Some(name) => self
                 .operations
@@ -1174,9 +1174,9 @@ impl Operation {
     fn from_hir(operation: &hir::OperationDefinition, schema: &Schema) -> Result<Self, SpecError> {
         let name = operation.name().map(|s| s.to_owned());
         let kind = operation.operation_ty().into();
-        if kind == OperationKind::Subscription {
-            return Err(SpecError::SubscriptionNotSupported);
-        }
+        // if kind == OperationKind::Subscription {
+        //     return Err(SpecError::SubscriptionNotSupported);
+        // }
         let current_field_type = FieldType::Named(schema.root_operation_name(kind).to_owned());
         let selection_set = operation
             .selection_set()

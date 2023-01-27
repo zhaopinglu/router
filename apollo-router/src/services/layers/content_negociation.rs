@@ -27,10 +27,14 @@ use crate::services::supergraph;
 use crate::services::MULTIPART_DEFER_CONTENT_TYPE;
 use crate::services::MULTIPART_DEFER_SPEC_PARAMETER;
 use crate::services::MULTIPART_DEFER_SPEC_VALUE;
+use crate::services::MULTIPART_SUBSCRIPTION_CONTENT_TYPE;
 
 pub(crate) const GRAPHQL_JSON_RESPONSE_HEADER_VALUE: &str = "application/graphql-response+json";
 pub(crate) const ACCEPTS_WILDCARD_CONTEXT_KEY: &str = "content-negociation:accepts-wildcard";
-pub(crate) const ACCEPTS_MULTIPART_CONTEXT_KEY: &str = "content-negociation:accepts-multipart";
+pub(crate) const ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY: &str =
+    "content-negociation:accepts-multipart-defer";
+pub(crate) const ACCEPTS_MULTIPART_SUBSCRIPTION_CONTEXT_KEY: &str =
+    "content-negociation:accepts-multipart-subscription";
 pub(crate) const ACCEPTS_JSON_CONTEXT_KEY: &str = "content-negociation:accepts-json";
 
 /// [`Layer`] for Content-Type checks implementation.
@@ -71,16 +75,28 @@ where
 
                     return Ok(ControlFlow::Break(response.into()));
                 }
-                let accepts_multipart = accepts_multipart(req.router_request.headers());
+                let accepts_multipart_defer = accepts_multipart_defer(req.router_request.headers());
+                let accepts_multipart_subscription =
+                    accepts_multipart_subscription(req.router_request.headers());
                 let accepts_json = accepts_json(req.router_request.headers());
                 let accepts_wildcard = accepts_wildcard(req.router_request.headers());
 
-                if accepts_wildcard || accepts_multipart || accepts_json {
+                if accepts_wildcard
+                    || accepts_multipart_defer
+                    || accepts_json
+                    || accepts_multipart_subscription
+                {
                     req.context
                         .insert(ACCEPTS_WILDCARD_CONTEXT_KEY, accepts_wildcard)
                         .unwrap();
                     req.context
-                        .insert(ACCEPTS_MULTIPART_CONTEXT_KEY, accepts_multipart)
+                        .insert(ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY, accepts_multipart_defer)
+                        .unwrap();
+                    req.context
+                        .insert(
+                            ACCEPTS_MULTIPART_SUBSCRIPTION_CONTEXT_KEY,
+                            accepts_multipart_subscription,
+                        )
                         .unwrap();
                     req.context
                         .insert(ACCEPTS_JSON_CONTEXT_KEY, accepts_json)
@@ -93,10 +109,11 @@ where
                                 serde_json::to_string(
                                     &graphql::Error::builder()
                                         .message(format!(
-                                            r#"'accept' header can't be different from \"*/*\", {:?}, {:?} or {:?}"#,
+                                            r#"'accept' header can't be different from \"*/*\", {:?}, {:?}, {:?} or {:?}"#,
                                             APPLICATION_JSON.essence_str(),
                                             GRAPHQL_JSON_RESPONSE_HEADER_VALUE,
-                                            MULTIPART_DEFER_CONTENT_TYPE
+                                            MULTIPART_SUBSCRIPTION_CONTENT_TYPE,
+                                            MULTIPART_DEFER_CONTENT_TYPE,
                                         ))
                                         .extension_code("INVALID_ACCEPT_HEADER")
                                         .build(),
@@ -136,8 +153,12 @@ where
                     .get(ACCEPTS_JSON_CONTEXT_KEY)
                     .unwrap_or_default()
                     .unwrap_or_default();
-                let accepts_multipart: bool = context
-                    .get(ACCEPTS_MULTIPART_CONTEXT_KEY)
+                let accepts_multipart_defer: bool = context
+                    .get(ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY)
+                    .unwrap_or_default()
+                    .unwrap_or_default();
+                let accepts_multipart_subscription: bool = context
+                    .get(ACCEPTS_MULTIPART_SUBSCRIPTION_CONTEXT_KEY)
                     .unwrap_or_default()
                     .unwrap_or_default();
 
@@ -146,10 +167,15 @@ where
                         CONTENT_TYPE,
                         HeaderValue::from_static(APPLICATION_JSON.essence_str()),
                     );
-                } else if accepts_multipart {
+                } else if accepts_multipart_defer {
                     parts.headers.insert(
                         CONTENT_TYPE,
                         HeaderValue::from_static(MULTIPART_DEFER_CONTENT_TYPE),
+                    );
+                } else if accepts_multipart_subscription {
+                    parts.headers.insert(
+                        CONTENT_TYPE,
+                        HeaderValue::from_static(MULTIPART_SUBSCRIPTION_CONTENT_TYPE),
                     );
                 }
                 (parts, res)
@@ -225,7 +251,7 @@ fn accepts_wildcard(headers: &HeaderMap) -> bool {
 }
 
 /// Returns true if the headers contain accept header to enable defer
-fn accepts_multipart(headers: &HeaderMap) -> bool {
+fn accepts_multipart_defer(headers: &HeaderMap) -> bool {
     headers.get_all(ACCEPT).iter().any(|value| {
         value
             .to_str()
@@ -244,6 +270,30 @@ fn accepts_multipart(headers: &HeaderMap) -> bool {
                                     mediatype::Value::new(MULTIPART_DEFER_SPEC_VALUE)
                                         .expect("valid value"),
                                 )
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// Returns true if the headers contain accept header to enable subscription
+fn accepts_multipart_subscription(headers: &HeaderMap) -> bool {
+    headers.get_all(ACCEPT).iter().any(|value| {
+        value
+            .to_str()
+            .map(|accept_str| {
+                let mut list = MediaTypeList::new(accept_str);
+
+                list.any(|mime| {
+                    mime.as_ref()
+                        .map(|mime| {
+                            mime.ty == MULTIPART
+                                && mime.subty == MIXED
+                                && mime.get_param(
+                                    mediatype::Name::new("boundary").expect("valid name"),
+                                ) == Some(mediatype::Value::new("graphql").expect("valid value"))
                         })
                         .unwrap_or(false)
                 })
@@ -293,6 +343,6 @@ mod tests {
             ACCEPT,
             HeaderValue::from_static(MULTIPART_DEFER_CONTENT_TYPE),
         );
-        assert!(accepts_multipart(&default_headers));
+        assert!(accepts_multipart_defer(&default_headers));
     }
 }

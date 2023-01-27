@@ -31,7 +31,8 @@ use tower_service::Service;
 use super::layers::apq::APQLayer;
 use super::layers::content_negociation;
 use super::layers::content_negociation::ACCEPTS_JSON_CONTEXT_KEY;
-use super::layers::content_negociation::ACCEPTS_MULTIPART_CONTEXT_KEY;
+use super::layers::content_negociation::ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY;
+use super::layers::content_negociation::ACCEPTS_MULTIPART_SUBSCRIPTION_CONTEXT_KEY;
 use super::layers::content_negociation::ACCEPTS_WILDCARD_CONTEXT_KEY;
 use super::layers::static_page::StaticPageLayer;
 use super::new_service::ServiceFactory;
@@ -268,8 +269,12 @@ where
                         .get(ACCEPTS_JSON_CONTEXT_KEY)
                         .unwrap_or_default()
                         .unwrap_or_default();
-                    let accepts_multipart: bool = context
-                        .get(ACCEPTS_MULTIPART_CONTEXT_KEY)
+                    let accepts_multipart_defer: bool = context
+                        .get(ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY)
+                        .unwrap_or_default()
+                        .unwrap_or_default();
+                    let accepts_multipart_subscription: bool = context
+                        .get(ACCEPTS_MULTIPART_SUBSCRIPTION_CONTEXT_KEY)
                         .unwrap_or_default()
                         .unwrap_or_default();
 
@@ -291,6 +296,7 @@ where
                         }
                         Some(response) => {
                             if !response.has_next.unwrap_or(false)
+                                & !response.subscribed.unwrap_or(false)
                                 && (accepts_json || accepts_wildcard)
                             {
                                 parts.headers.insert(
@@ -307,7 +313,7 @@ where
                                         context,
                                     })
                                 })
-                            } else if accepts_multipart {
+                            } else if accepts_multipart_defer || accepts_multipart_subscription {
                                 parts.headers.insert(
                                     CONTENT_TYPE,
                                     HeaderValue::from_static(MULTIPART_DEFER_CONTENT_TYPE),
@@ -319,7 +325,9 @@ where
                                     &b"\r\n--graphql\r\ncontent-type: application/json\r\n\r\n"[..],
                                 );
                                 serde_json::to_writer(&mut first_buf, &response)?;
-                                if response.has_next.unwrap_or(false) {
+                                if response.has_next.unwrap_or(false)
+                                    || response.subscribed.unwrap_or(false)
+                                {
                                     first_buf.extend_from_slice(b"\r\n--graphql\r\n");
                                 } else {
                                     first_buf.extend_from_slice(b"\r\n--graphql--\r\n");
@@ -333,7 +341,9 @@ where
                                         serde_json::to_writer(&mut buf, &res)?;
 
                                         // the last chunk has a different end delimiter
-                                        if res.has_next.unwrap_or(false) {
+                                        if res.has_next.unwrap_or(false)
+                                            || res.subscribed.unwrap_or(false)
+                                        {
                                             buf.extend_from_slice(b"\r\n--graphql\r\n");
                                         } else {
                                             buf.extend_from_slice(b"\r\n--graphql--\r\n");
