@@ -1468,6 +1468,7 @@ mod tests {
             .create_instance(
                 &serde_json::json!({"apollo": {"schema_id":"abc"}, "tracing": {}}),
                 Default::default(),
+                Default::default(),
             )
             .await
             .unwrap();
@@ -1615,6 +1616,7 @@ mod tests {
                         }
                     }
                 }),
+                Default::default(),
                 Default::default(),
             )
             .await
@@ -1782,6 +1784,7 @@ mod tests {
             }"#,
                 )
                 .unwrap(),
+                Default::default(),
                 Default::default(),
             )
             .await

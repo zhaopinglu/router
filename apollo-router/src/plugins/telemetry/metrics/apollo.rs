@@ -249,7 +249,7 @@ mod test {
     async fn create_plugin_with_apollo_config(
         apollo_config: apollo::Config,
     ) -> Result<Telemetry, BoxError> {
-        Telemetry::new(PluginInit::new(
+        Telemetry::new(PluginInit::fake_new(
             config::Conf {
                 logging: None,
                 metrics: None,

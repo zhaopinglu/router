@@ -11,6 +11,7 @@ mod bridge_query_planner;
 mod caching_query_planner;
 mod execution;
 pub(crate) mod fetch;
+pub(crate) mod subscription;
 mod plan;
 mod selection;
 pub use plan::*;

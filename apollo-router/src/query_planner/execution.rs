@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::join_all;
+use futures::pin_mut;
 use futures::prelude::*;
 use tokio::sync::broadcast::Sender;
 use tokio_stream::wrappers::BroadcastStream;
@@ -10,6 +11,7 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 use super::log;
+use super::subscription::SubscriptionHandle;
 use super::DeferredNode;
 use super::PlanNode;
 use super::QueryPlan;
@@ -34,11 +36,10 @@ use crate::query_planner::FLATTEN_SPAN_NAME;
 use crate::query_planner::PARALLEL_SPAN_NAME;
 use crate::query_planner::SEQUENCE_SPAN_NAME;
 use crate::services::SubgraphServiceFactory;
+use crate::services::SUBSCRIPTION_ID_KEY_CONTEXT;
 use crate::spec::Query;
 use crate::spec::Schema;
 use crate::Context;
-
-pub(crate) const SUBSCRIPTION_ID_KEY_CONTEXT: &str = "query_plan::subscription_id";
 
 impl QueryPlan {
     /// Execute the plan and return a [`Response`].
@@ -49,7 +50,7 @@ impl QueryPlan {
         supergraph_request: &'a Arc<http::Request<Request>>,
         schema: &'a Arc<Schema>,
         sender: futures::channel::mpsc::Sender<Response>,
-        notify: Notify,
+        subscription_handle: Option<SubscriptionHandle>,
     ) -> Response {
         let root = Path::empty();
 
@@ -69,7 +70,7 @@ impl QueryPlan {
                 &root,
                 &Value::default(),
                 sender,
-                notify,
+                subscription_handle,
             )
             .await;
 
@@ -102,7 +103,7 @@ impl PlanNode {
         current_dir: &'a Path,
         parent_value: &'a Value,
         mut sender: futures::channel::mpsc::Sender<Response>,
-        mut notify: Notify,
+        mut subscription_handle: Option<SubscriptionHandle>,
     ) -> future::BoxFuture<(Value, Option<String>, Vec<Error>)> {
         Box::pin(async move {
             tracing::trace!("executing plan:\n{:#?}", self);
@@ -122,7 +123,7 @@ impl PlanNode {
                                     current_dir,
                                     &value,
                                     sender.clone(),
-                                    notify.clone(),
+                                    subscription_handle.clone(),
                                 )
                                 .in_current_span()
                                 .await;
@@ -149,7 +150,7 @@ impl PlanNode {
                                     current_dir,
                                     parent_value,
                                     sender.clone(),
-                                    notify.clone(),
+                                    subscription_handle.clone(),
                                 )
                                 .in_current_span()
                             })
@@ -177,7 +178,7 @@ impl PlanNode {
                             &current_dir,
                             parent_value,
                             sender,
-                            notify,
+                            subscription_handle,
                         )
                         .instrument(tracing::info_span!(FLATTEN_SPAN_NAME, "graphql.path" = %current_dir, "otel.kind" = "INTERNAL"))
                         .await;
@@ -188,32 +189,46 @@ impl PlanNode {
                 }
                 PlanNode::Fetch(fetch_node) => {
                     if let OperationKind::Subscription = fetch_node.operation_kind() {
-                        let subscription_id = Uuid::new_v4();
-                        let _ = parameters
-                            .context
-                            .insert(SUBSCRIPTION_ID_KEY_CONTEXT, subscription_id);
-                        let _ = notify.subscribe(subscription_id).await;
-                        dbg!(subscription_id);
+                        match subscription_handle {
+                            Some(mut subscription_handle) => {
+                                println!("Generated subscription ID: {}", subscription_handle.id);
+                                tokio::task::spawn(async move {
+                                    let mut handle = subscription_handle
+                                        .notify
+                                        .subscribe(subscription_handle.id)
+                                        .await;
+                                    let receiver = handle.receiver();
 
-                        // Do the callback
+                                    while let Some(val) = receiver.next().await {
+                                        if let Err(err) = sender
+                                            .send(
+                                                Response::builder()
+                                                    .data(val)
+                                                    .subscribed(true)
+                                                    .build(),
+                                            )
+                                            .await
+                                        {
+                                            tracing::error!(
+                                                "cannot send the subscription to the client: {err:?}"
+                                            );
+                                            break;
+                                        }
+                                    }
+                                    tracing::trace!(
+                                        "Leaving the trask for subscription {}",
+                                        subscription_handle.id
+                                    );
+                                });
+                            }
+                            None => {
+                                tracing::error!(
+                                    "No subscription handle provided for a subscription"
+                                );
+                            }
+                        }
 
-                        // Generate sub id
-                        // add it in pub sub with query_plan
-                        //
-                        // Send callback
-                        // TODO in the future it should be a SubscriptionNode
-                        // TODO mock a sub
-                        // tokio::task::spawn(async move {
-
-                        //     for _ in 0..5 {
-                        //         tokio::time::sleep(Duration::from_millis(2000)).await;
-                        //         let val =
-                        //             serde_json_bytes::json!({"userWasCreated": {"name": "ok"}});
-                        //         sender
-                        //             .send(Response::builder().data(val).subscribed(true).build())
-                        //             .await;
-                        //     }
-                        // });
+                        // TODO call the subgraph with the subscription + callback
 
                         value = Value::default();
                         errors = vec![];
@@ -267,7 +282,7 @@ impl PlanNode {
                                     parameters,
                                     parent_value,
                                     sender.clone(),
-                                    notify.clone(),
+                                    subscription_handle.clone(),
                                     &primary_sender,
                                     &mut deferred_fetches,
                                 )
@@ -294,7 +309,7 @@ impl PlanNode {
                                     current_dir,
                                     &value,
                                     sender,
-                                    notify,
+                                    subscription_handle,
                                 )
                                 .instrument(tracing::info_span!(
                                     DEFER_PRIMARY_SPAN_NAME,
@@ -348,7 +363,7 @@ impl PlanNode {
                                         current_dir,
                                         parent_value,
                                         sender.clone(),
-                                        notify.clone(),
+                                        subscription_handle.clone(),
                                     )
                                     .instrument(tracing::info_span!(
                                         CONDITION_IF_SPAN_NAME,
@@ -366,7 +381,7 @@ impl PlanNode {
                                     current_dir,
                                     parent_value,
                                     sender.clone(),
-                                    notify.clone(),
+                                    subscription_handle.clone(),
                                 )
                                 .instrument(tracing::info_span!(
                                     CONDITION_ELSE_SPAN_NAME,
@@ -398,7 +413,7 @@ impl DeferredNode {
         parameters: &'a ExecutionParameters<'a>,
         parent_value: &Value,
         sender: futures::channel::mpsc::Sender<Response>,
-        notify: Notify,
+        subscription_handle: Option<SubscriptionHandle>,
         primary_sender: &Sender<(Value, Vec<Error>)>,
         deferred_fetches: &mut HashMap<String, Sender<(Value, Vec<Error>)>>,
     ) -> impl Future<Output = ()> {
@@ -477,7 +492,7 @@ impl DeferredNode {
                         &Path::default(),
                         &value,
                         tx.clone(),
-                        notify.clone(),
+                        subscription_handle,
                     )
                     .instrument(tracing::info_span!(
                         DEFER_DEFERRED_SPAN_NAME,

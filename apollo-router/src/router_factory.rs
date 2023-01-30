@@ -370,6 +370,7 @@ pub(crate) async fn create_plugins(
     let plugin_registry: Vec<&'static Lazy<PluginFactory>> = crate::plugin::plugins().collect();
     let mut plugin_instances = Vec::new();
     let extra = extra_plugins.unwrap_or_default();
+    let notify = configuration.notify.clone();
 
     for (name, mut configuration) in configuration.plugins().into_iter() {
         if extra.iter().any(|(n, _)| *n == name) {
@@ -388,7 +389,7 @@ pub(crate) async fn create_plugins(
                     inject_schema_id(schema, &mut configuration);
                 }
                 match factory
-                    .create_instance(&configuration, schema.as_string().clone())
+                    .create_instance(&configuration, schema.as_string().clone(), notify.clone())
                     .await
                 {
                     Ok(plugin) => {
@@ -439,7 +440,7 @@ pub(crate) async fn create_plugins(
                             inject_schema_id(schema, &mut config);
                         }
                         match factory
-                            .create_instance(&config, schema.as_string().clone())
+                            .create_instance(&config, schema.as_string().clone(), notify.clone())
                             .await
                         {
                             Ok(plugin) => {

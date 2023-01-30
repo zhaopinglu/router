@@ -1,22 +1,29 @@
 //! Implements the Execution phase of the request lifecycle.
 
 use std::future::ready;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Context;
 use std::task::Poll;
 
+use futures::channel::mpsc;
 use futures::channel::mpsc::Receiver;
 use futures::channel::mpsc::SendError;
 use futures::channel::mpsc::Sender;
 use futures::future::BoxFuture;
 use futures::stream::once;
+use futures::FutureExt;
 use futures::SinkExt;
+use futures::Stream;
 use futures::StreamExt;
 use serde_json_bytes::Value;
+use tokio::sync::oneshot;
 use tower::BoxError;
 use tower::ServiceBuilder;
 use tower::ServiceExt;
 use tower_service::Service;
 use tracing::Instrument;
+use uuid::Uuid;
 
 use super::layers::allow_only_http_post_mutations::AllowOnlyHttpPostMutationsLayer;
 use super::new_service::ServiceFactory;
@@ -29,10 +36,13 @@ use crate::json_ext::Path;
 use crate::json_ext::PathElement;
 use crate::json_ext::ValueExt;
 use crate::notification::Notify;
+use crate::query_planner::subscription::SubscriptionHandle;
 use crate::services::execution;
 use crate::services::ExecutionRequest;
 use crate::services::ExecutionResponse;
 use crate::spec::Schema;
+
+pub(crate) const SUBSCRIPTION_ID_KEY_CONTEXT: &str = "query_plan::subscription_id";
 
 /// [`Service`] for query execution.
 #[derive(Clone)]
@@ -40,6 +50,28 @@ pub(crate) struct ExecutionService {
     pub(crate) schema: Arc<Schema>,
     pub(crate) subgraph_service_factory: Arc<SubgraphServiceFactory>,
     pub(crate) notify: Notify,
+}
+
+// Used to detect when the stream is dropped and then when the client closed the connection
+pub(crate) struct StreamWrapper(pub(crate) Receiver<Response>, Option<SubscriptionHandle>);
+
+impl Stream for StreamWrapper {
+    type Item = Response;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx)
+    }
+}
+
+impl Drop for StreamWrapper {
+    fn drop(&mut self) {
+        println!("DROPPED");
+        if let Some(mut subscription_handle) = self.1.take() {
+            subscription_handle
+                .notify
+                .try_delete(subscription_handle.id);
+        }
+    }
 }
 
 impl Service<ExecutionRequest> for ExecutionService {
@@ -66,7 +98,7 @@ impl Service<ExecutionRequest> for ExecutionService {
         let fut = async move {
             let context = req.context;
             let ctx = context.clone();
-            let (sender, receiver) = futures::channel::mpsc::channel(10);
+            let (sender, receiver) = mpsc::channel(10);
             let variables = req.supergraph_request.body().variables.clone();
             let operation_name = req.supergraph_request.body().operation_name.clone();
 
@@ -76,6 +108,13 @@ impl Service<ExecutionRequest> for ExecutionService {
             let is_subscription = req
                 .query_plan
                 .is_subscription(operation_name.as_deref());
+            let subscription_handle = if is_subscription {
+                let subscription_id = Uuid::new_v4();
+                let _ = ctx.insert(SUBSCRIPTION_ID_KEY_CONTEXT, subscription_id).expect("cannot put subscription id in the context");
+                Some(SubscriptionHandle::new(subscription_id, this.notify.clone()))
+            } else {
+                None
+            };
 
             let mut first = req
                 .query_plan
@@ -85,10 +124,9 @@ impl Service<ExecutionRequest> for ExecutionService {
                     &Arc::new(req.supergraph_request),
                     &this.schema,
                     sender,
-                    this.notify.clone(),
+                    subscription_handle.clone(),
                 )
                 .await;
-
             let query = req.query_plan.query.clone();
             let stream = if is_deferred || is_subscription {
                 let stream_mode = if is_deferred {
@@ -97,7 +135,8 @@ impl Service<ExecutionRequest> for ExecutionService {
                     first.subscribed = Some(true);
                     StreamMode::Subscription
                 };
-                filter_stream(first, receiver, stream_mode).boxed()
+                let stream = filter_stream(first, receiver, stream_mode);
+                StreamWrapper(stream, subscription_handle).boxed()
             } else {
                 once(ready(first)).chain(receiver).boxed()
             };
@@ -187,7 +226,7 @@ impl Service<ExecutionRequest> for ExecutionService {
                                         .iter()
                                         .filter(|error| match &error.path {
                                             None => false,
-                                            Some(error_path) =>query.contains_error_path(operation_name.as_deref(), response.subselection.as_deref(), response.path.as_ref(), error_path) &&  error_path.starts_with(&path),
+                                            Some(error_path) => query.contains_error_path(operation_name.as_deref(), response.subselection.as_deref(), response.path.as_ref(), error_path) &&  error_path.starts_with(&path),
 
                                         })
                                         .cloned()
@@ -290,15 +329,18 @@ fn filter_stream(
     mut stream: Receiver<Response>,
     stream_mode: StreamMode,
 ) -> Receiver<Response> {
-    let (mut sender, receiver) = futures::channel::mpsc::channel(10);
+    let (mut sender, receiver) = mpsc::channel(10);
 
     tokio::task::spawn(async move {
-        let mut seen_last_message =
-            consume_responses(first, &mut stream, &mut sender, stream_mode).await?;
+        let mut seen_last_message = consume_responses(first, &mut stream, &mut sender, stream_mode)
+            .await
+            .map_err(|err| dbg!(err))?;
 
         while let Some(current_response) = stream.next().await {
             seen_last_message =
-                consume_responses(current_response, &mut stream, &mut sender, stream_mode).await?;
+                consume_responses(current_response, &mut stream, &mut sender, stream_mode)
+                    .await
+                    .map_err(|err| dbg!(err))?;
         }
 
         // the response stream disconnected early so we could not add `has_next = false` to the
@@ -308,8 +350,9 @@ fn filter_stream(
                 StreamMode::Defer => Response::builder().has_next(false).build(),
                 StreamMode::Subscription => Response::builder().subscribed(false).build(),
             };
-            sender.send(res).await?;
+            sender.send(res).await.map_err(|err| dbg!(err))?;
         }
+
         Ok::<_, SendError>(())
     });
 
@@ -329,7 +372,7 @@ async fn consume_responses(
             // this means more deferred responses can come
             Err(_) => {
                 sender.send(current_response).await?;
-
+                dbg!("errrooooor !!!");
                 return Ok(false);
             }
 
@@ -343,6 +386,8 @@ async fn consume_responses(
             // there will be no other deferred responses after that,
             // so we set `has_next` to `false`
             Ok(None) => {
+                dbg!("DOOOONE !!!");
+
                 match stream_mode {
                     StreamMode::Defer => current_response.has_next = Some(false),
                     StreamMode::Subscription => current_response.subscribed = Some(false),

@@ -36,6 +36,9 @@ enum Notification {
     Unsubscribe {
         handle: Uuid,
     },
+    Delete {
+        topic: Uuid,
+    },
     Publish {
         topic: Uuid,
         data: Value,
@@ -71,6 +74,11 @@ impl Notify {
             .await;
 
         handle
+    }
+
+    pub(crate) fn try_delete(&mut self, topic: Uuid) {
+        // if disconnected, we don't care (the task was stopped)
+        let _ = self.sender.try_send(Notification::Delete { topic });
     }
 
     pub(crate) async fn publish(&mut self, topic: Uuid, data: Value) {
@@ -117,6 +125,7 @@ impl Handle {
 
 async fn task(mut receiver: mpsc::Receiver<Notification>) {
     let mut pubsub = PubSub::default();
+
     while let Some(message) = receiver.next().await {
         match message {
             Notification::Subscribe {
@@ -125,6 +134,7 @@ async fn task(mut receiver: mpsc::Receiver<Notification>) {
                 sender,
             } => pubsub.subscribe(topic, handle, sender).await,
             Notification::Unsubscribe { handle } => pubsub.unsubscribe(handle).await,
+            Notification::Delete { topic } => pubsub.delete(topic).await,
             Notification::Publish { topic, data } => {
                 pubsub.publish(topic, data).await;
             }
@@ -163,6 +173,39 @@ impl PubSub {
         });
     }
 
+    async fn recycle(&mut self) {
+        let mut subs_to_delete = HashSet::new();
+        self.subscribers.retain(|sub_id, sub_chan| {
+            if sub_chan.is_closed() {
+                subs_to_delete.insert(*sub_id);
+                false
+            } else {
+                true
+            }
+        });
+
+        self.subscriptions = self
+            .subscriptions
+            .drain()
+            .into_iter()
+            .filter_map(|(topic, mut subscribers)| {
+                subscribers = subscribers
+                    .symmetric_difference(&subs_to_delete)
+                    .cloned()
+                    .collect();
+                (!subscribers.is_empty()).then_some((topic, subscribers))
+            })
+            .collect();
+    }
+
+    async fn delete(&mut self, topic: Uuid) {
+        if let Some(subscribers) = self.subscriptions.remove(&topic) {
+            subscribers.into_iter().for_each(|s| {
+                self.subscribers.remove(&s);
+            });
+        }
+    }
+
     async fn publish(&mut self, topic: Uuid, value: Value) -> Option<()> {
         let subscribers = self.subscriptions.get(&topic)?;
         let mut fut = vec![];
@@ -186,6 +229,8 @@ impl PubSub {
                 .iter_mut()
                 .for_each(|(_topic, handles)| handles.retain(|h| h != &handle_to_clean));
         }
+        self.subscriptions.retain(|_k, s| !s.is_empty());
+        dbg!(&self.subscriptions);
 
         Some(())
     }

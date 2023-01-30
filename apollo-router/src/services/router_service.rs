@@ -352,7 +352,6 @@ where
                                         Ok::<_, BoxError>(buf.into())
                                     },
                                 ));
-
                                 let response =
                                     (parts, StreamBody::new(body)).into_response().map(|body| {
                                         // Axum makes this `body` have type:
