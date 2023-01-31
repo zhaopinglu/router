@@ -1,29 +1,15 @@
-//! Internal pub/sub facility for invalidation
-//!
-//! The rules:
-//! - any part of the router can subscribe to changes on a list of keys
-//! - you get one notification at the first key that changes, no more after
-//!  that (because a notification will trigger a new query, which means resubscribing on a different set of keys)
-//! - you can cancel a subscription (drop the handle)
-//! - you can send an invalidation notification for a list of keys
-//! - subscriptions survive configuration or schema updates
+//! Internal pub/sub facility for subscription
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use futures::channel::mpsc;
 use futures::channel::oneshot;
-use futures::AsyncRead;
-use futures::Future;
 use futures::SinkExt;
 use futures::StreamExt;
-use pin_project_lite::pin_project;
-use rand::Rng;
 use serde_json_bytes::Value;
 use uuid::Uuid;
-
-use crate::services::execution::QueryPlan;
 
 enum Notification {
     Subscribe {
@@ -42,6 +28,12 @@ enum Notification {
     Publish {
         topic: Uuid,
         data: Value,
+    },
+    SubscribeIfExist {
+        topic: Uuid,
+        handle: Uuid,
+        sender: mpsc::Sender<Value>,
+        response_sender: oneshot::Sender<bool>,
     },
 }
 
@@ -74,6 +66,32 @@ impl Notify {
             .await;
 
         handle
+    }
+
+    pub(crate) async fn subscribe_if_exist(&mut self, topic: Uuid) -> Option<Handle> {
+        let (sender, receiver) = mpsc::channel(10);
+        let id = Uuid::new_v4();
+        let handle = Handle {
+            receiver,
+            id,
+            sender: self.sender.clone(),
+        };
+        // Channel to check if the topic still exists or not
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(Notification::SubscribeIfExist {
+                handle: handle.id,
+                topic,
+                sender,
+                response_sender: response_tx,
+            })
+            .await
+            .ok()?;
+
+        match response_rx.await {
+            Ok(true) => Some(handle),
+            _ => None,
+        }
     }
 
     pub(crate) fn try_delete(&mut self, topic: Uuid) {
@@ -121,6 +139,13 @@ impl Handle {
     pub(crate) fn receiver(&mut self) -> &mut mpsc::Receiver<Value> {
         &mut self.receiver
     }
+
+    pub(crate) async fn publish(&mut self, topic: Uuid, data: Value) {
+        // FIXME: handle errors
+        self.sender
+            .send(Notification::Publish { topic, data })
+            .await;
+    }
 }
 
 async fn task(mut receiver: mpsc::Receiver<Notification>) {
@@ -137,6 +162,19 @@ async fn task(mut receiver: mpsc::Receiver<Notification>) {
             Notification::Delete { topic } => pubsub.delete(topic).await,
             Notification::Publish { topic, data } => {
                 pubsub.publish(topic, data).await;
+            }
+            Notification::SubscribeIfExist {
+                topic,
+                handle,
+                sender,
+                response_sender,
+            } => {
+                if pubsub.is_used(topic, handle) {
+                    let _ = response_sender.send(true);
+                    pubsub.subscribe(topic, handle, sender).await;
+                } else {
+                    let _ = response_sender.send(false);
+                }
             }
         }
     }
@@ -196,6 +234,18 @@ impl PubSub {
                 (!subscribers.is_empty()).then_some((topic, subscribers))
             })
             .collect();
+    }
+
+    /// Check if the topic is used by anyone else than the current handle
+    fn is_used(&self, topic: Uuid, handle: Uuid) -> bool {
+        self.subscriptions
+            .get(&topic)
+            .map(|s| {
+                !s.difference(&[handle].into())
+                    .collect::<HashSet<&Uuid>>()
+                    .is_empty()
+            })
+            .unwrap_or_default()
     }
 
     async fn delete(&mut self, topic: Uuid) {

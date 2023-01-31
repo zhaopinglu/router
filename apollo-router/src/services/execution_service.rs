@@ -65,7 +65,6 @@ impl Stream for StreamWrapper {
 
 impl Drop for StreamWrapper {
     fn drop(&mut self) {
-        println!("DROPPED");
         if let Some(mut subscription_handle) = self.1.take() {
             subscription_handle
                 .notify
@@ -350,7 +349,7 @@ fn filter_stream(
                 StreamMode::Defer => Response::builder().has_next(false).build(),
                 StreamMode::Subscription => Response::builder().subscribed(false).build(),
             };
-            sender.send(res).await.map_err(|err| dbg!(err))?;
+            sender.send(res).await?;
         }
 
         Ok::<_, SendError>(())
@@ -372,7 +371,6 @@ async fn consume_responses(
             // this means more deferred responses can come
             Err(_) => {
                 sender.send(current_response).await?;
-                dbg!("errrooooor !!!");
                 return Ok(false);
             }
 
@@ -386,8 +384,6 @@ async fn consume_responses(
             // there will be no other deferred responses after that,
             // so we set `has_next` to `false`
             Ok(None) => {
-                dbg!("DOOOONE !!!");
-
                 match stream_mode {
                     StreamMode::Defer => current_response.has_next = Some(false),
                     StreamMode::Subscription => current_response.subscribed = Some(false),

@@ -36,7 +36,6 @@ use crate::query_planner::FLATTEN_SPAN_NAME;
 use crate::query_planner::PARALLEL_SPAN_NAME;
 use crate::query_planner::SEQUENCE_SPAN_NAME;
 use crate::services::SubgraphServiceFactory;
-use crate::services::SUBSCRIPTION_ID_KEY_CONTEXT;
 use crate::spec::Query;
 use crate::spec::Schema;
 use crate::Context;
@@ -192,7 +191,7 @@ impl PlanNode {
                         match subscription_handle {
                             Some(mut subscription_handle) => {
                                 println!("Generated subscription ID: {}", subscription_handle.id);
-                                tokio::task::spawn(async move {
+                                let _ = tokio::task::spawn(async move {
                                     let mut handle = subscription_handle
                                         .notify
                                         .subscribe(subscription_handle.id)
@@ -200,6 +199,7 @@ impl PlanNode {
                                     let receiver = handle.receiver();
 
                                     while let Some(val) = receiver.next().await {
+                                        // TODO: Re-Execute the query plan after subscription to aggregate data
                                         if let Err(err) = sender
                                             .send(
                                                 Response::builder()
@@ -216,7 +216,7 @@ impl PlanNode {
                                         }
                                     }
                                     tracing::trace!(
-                                        "Leaving the trask for subscription {}",
+                                        "Leaving the task for subscription {}",
                                         subscription_handle.id
                                     );
                                 });

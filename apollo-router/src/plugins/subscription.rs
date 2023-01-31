@@ -39,6 +39,7 @@ struct SubscriptionConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SubscriptionMode {
+    // TODO add listen and path conf
     /// Using a callback url
     #[serde(rename = "callback")]
     Callback { public_url: String },
@@ -127,6 +128,7 @@ impl Service<router::Request> for CallbackService {
                         });
                     }
                 };
+
             let cb_body = hyper::body::to_bytes(body)
                 .await
                 .map_err(|e| format!("failed to get the request body: {}", e))
@@ -150,8 +152,20 @@ impl Service<router::Request> for CallbackService {
 
             match cb_body {
                 CallbackPayload::Subscription { data } => {
-                    // FIXME: need to handle error if sub_id doesn't exist
-                    notify.publish(sub_id, data).await;
+                    let mut handle = match notify.subscribe_if_exist(sub_id).await {
+                        Some(handle) => handle,
+                        None => {
+                            return Ok(router::Response {
+                                response: http::Response::builder()
+                                    .status(StatusCode::NOT_FOUND)
+                                    .body("suscription doesn't exist".into())
+                                    .map_err(BoxError::from)?,
+                                context: req.context,
+                            });
+                        }
+                    };
+
+                    handle.publish(sub_id, data).await;
                 }
             }
 
