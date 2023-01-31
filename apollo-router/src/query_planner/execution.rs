@@ -21,7 +21,6 @@ use crate::graphql::Response;
 use crate::json_ext::Path;
 use crate::json_ext::Value;
 use crate::json_ext::ValueExt;
-use crate::notification::Notify;
 use crate::query_planner::FlattenNode;
 use crate::query_planner::OperationKind;
 use crate::query_planner::Primary;
@@ -55,6 +54,7 @@ impl QueryPlan {
 
         log::trace_query_plan(&self.root);
         let deferred_fetches = HashMap::new();
+
         let (value, subselection, errors) = self
             .root
             .execute_recursively(
@@ -65,6 +65,7 @@ impl QueryPlan {
                     supergraph_request,
                     deferred_fetches: &deferred_fetches,
                     query: &self.query,
+                    root_node: &self.root,
                 },
                 &root,
                 &Value::default(),
@@ -86,6 +87,7 @@ impl QueryPlan {
 }
 
 // holds the query plan executon arguments that do not change between calls
+#[derive(Clone)]
 pub(crate) struct ExecutionParameters<'a> {
     pub(crate) context: &'a Context,
     pub(crate) service_factory: &'a Arc<SubgraphServiceFactory>,
@@ -93,6 +95,7 @@ pub(crate) struct ExecutionParameters<'a> {
     pub(crate) supergraph_request: &'a Arc<http::Request<Request>>,
     pub(crate) deferred_fetches: &'a HashMap<String, Sender<(Value, Vec<Error>)>>,
     pub(crate) query: &'a Arc<Query>,
+    pub(crate) root_node: &'a PlanNode,
 }
 
 impl PlanNode {
@@ -102,7 +105,7 @@ impl PlanNode {
         current_dir: &'a Path,
         parent_value: &'a Value,
         mut sender: futures::channel::mpsc::Sender<Response>,
-        mut subscription_handle: Option<SubscriptionHandle>,
+        subscription_handle: Option<SubscriptionHandle>,
     ) -> future::BoxFuture<(Value, Option<String>, Vec<Error>)> {
         Box::pin(async move {
             tracing::trace!("executing plan:\n{:#?}", self);
@@ -190,6 +193,19 @@ impl PlanNode {
                     if let OperationKind::Subscription = fetch_node.operation_kind() {
                         match subscription_handle {
                             Some(mut subscription_handle) => {
+                                // TODO put this in a function
+                                let mut cloned_qp = parameters.root_node.clone();
+                                cloned_qp.without_subscription();
+
+                                let current_dir = current_dir.clone();
+                                let context = parameters.context.clone();
+                                let service_factory = parameters.service_factory.clone();
+                                let schema = parameters.schema.clone();
+                                let supergraph_request = parameters.supergraph_request.clone();
+                                let deferred_fetches = parameters.deferred_fetches.clone();
+                                let query = parameters.query.clone();
+                                let root_node = parameters.root_node.clone();
+
                                 println!("Generated subscription ID: {}", subscription_handle.id);
                                 let _ = tokio::task::spawn(async move {
                                     let mut handle = subscription_handle
@@ -197,14 +213,37 @@ impl PlanNode {
                                         .subscribe(subscription_handle.id)
                                         .await;
                                     let receiver = handle.receiver();
+                                    let cloned_qp = cloned_qp;
+                                    let parameters = ExecutionParameters {
+                                        context: &context,
+                                        service_factory: &service_factory,
+                                        schema: &schema,
+                                        supergraph_request: &supergraph_request,
+                                        deferred_fetches: &deferred_fetches,
+                                        query: &query,
+                                        root_node: &root_node,
+                                    };
+
+                                    // Take the remaining query plan
 
                                     while let Some(val) = receiver.next().await {
+                                        let (value, subselection, errors) = cloned_qp
+                                            .execute_recursively(
+                                                &parameters,
+                                                &current_dir,
+                                                &val,
+                                                sender.clone(),
+                                                None,
+                                            )
+                                            .await;
                                         // TODO: Re-Execute the query plan after subscription to aggregate data
                                         if let Err(err) = sender
                                             .send(
                                                 Response::builder()
-                                                    .data(val)
+                                                    .data(value)
                                                     .subscribed(true)
+                                                    .and_subselection(subselection)
+                                                    .errors(errors)
                                                     .build(),
                                             )
                                             .await
@@ -305,6 +344,7 @@ impl PlanNode {
                                         supergraph_request: parameters.supergraph_request,
                                         deferred_fetches: &deferred_fetches,
                                         query: parameters.query,
+                                        root_node: parameters.root_node,
                                     },
                                     current_dir,
                                     &value,
@@ -450,6 +490,7 @@ impl DeferredNode {
         let sc = parameters.schema.clone();
         let orig = parameters.supergraph_request.clone();
         let sf = parameters.service_factory.clone();
+        let root_node = parameters.root_node.clone();
         let ctx = parameters.context.clone();
         let query = parameters.query.clone();
         let mut primary_receiver = primary_sender.subscribe();
@@ -488,6 +529,7 @@ impl DeferredNode {
                             supergraph_request: &orig,
                             deferred_fetches: &deferred_fetches,
                             query: &query,
+                            root_node: &root_node,
                         },
                         &Path::default(),
                         &value,

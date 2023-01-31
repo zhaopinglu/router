@@ -201,6 +201,47 @@ impl PlanNode {
         Ok(subselections)
     }
 
+    fn is_subscription(&self) -> bool {
+        match self {
+            Self::Fetch(fetch_node) => fetch_node.operation_kind() == &OperationKind::Subscription,
+            _ => false,
+        }
+    }
+
+    // Just a workaround waiting for the qp impl
+    pub(crate) fn without_subscription(&mut self) {
+        match self {
+            PlanNode::Sequence { nodes } | PlanNode::Parallel { nodes } => {
+                nodes.retain(|n| !n.is_subscription())
+            }
+            PlanNode::Fetch(_) => {
+                *self = PlanNode::Sequence { nodes: Vec::new() };
+            }
+            PlanNode::Flatten(_) => todo!(),
+            PlanNode::Defer { .. } => {}
+            PlanNode::Condition {
+                if_clause,
+                else_clause,
+                ..
+            } => {
+                if if_clause
+                    .as_ref()
+                    .map(|i| i.is_subscription())
+                    .unwrap_or_default()
+                {
+                    *if_clause = None;
+                }
+                if else_clause
+                    .as_ref()
+                    .map(|i| i.is_subscription())
+                    .unwrap_or_default()
+                {
+                    *else_clause = None;
+                }
+            }
+        }
+    }
+
     fn collect_subselections(
         &self,
         schema: &Schema,
