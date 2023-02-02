@@ -226,16 +226,17 @@ impl PlanNode {
 
                                     // Take the remaining query plan
 
-                                    while let Some(val) = receiver.next().await {
-                                        let (value, subselection, errors) = cloned_qp
+                                    while let Some(mut val) = receiver.next().await {
+                                        let (value, subselection, mut errors) = cloned_qp
                                             .execute_recursively(
                                                 &parameters,
                                                 &current_dir,
-                                                &val,
+                                                &val.data.unwrap_or_default(),
                                                 sender.clone(),
                                                 None,
                                             )
                                             .await;
+                                        errors.append(&mut val.errors);
                                         // TODO: Re-Execute the query plan after subscription to aggregate data
                                         if let Err(err) = sender
                                             .send(
@@ -244,6 +245,8 @@ impl PlanNode {
                                                     .subscribed(true)
                                                     .and_subselection(subselection)
                                                     .errors(errors)
+                                                    .extensions(val.extensions)
+                                                    .and_path(val.path)
                                                     .build(),
                                             )
                                             .await

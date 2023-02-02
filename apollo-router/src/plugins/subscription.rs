@@ -14,6 +14,7 @@ use tower::BoxError;
 use tower::Service;
 use tower::ServiceExt;
 
+use crate::graphql::Response;
 use crate::notification::Notify;
 use crate::plugin::Plugin;
 use crate::plugin::PluginInit;
@@ -88,7 +89,8 @@ impl Plugin for Subscription {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "kind", rename = "lowercase")]
 enum CallbackPayload {
-    Subscription { data: Value },
+    #[serde(rename = "subscription")]
+    Subscription { data: Response },
 }
 
 #[derive(Clone)]
