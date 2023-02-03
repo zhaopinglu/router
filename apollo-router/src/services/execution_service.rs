@@ -331,15 +331,12 @@ fn filter_stream(
     let (mut sender, receiver) = mpsc::channel(10);
 
     tokio::task::spawn(async move {
-        let mut seen_last_message = consume_responses(first, &mut stream, &mut sender, stream_mode)
-            .await
-            .map_err(|err| dbg!(err))?;
+        let mut seen_last_message =
+            consume_responses(first, &mut stream, &mut sender, stream_mode).await?;
 
         while let Some(current_response) = stream.next().await {
             seen_last_message =
-                consume_responses(current_response, &mut stream, &mut sender, stream_mode)
-                    .await
-                    .map_err(|err| dbg!(err))?;
+                consume_responses(current_response, &mut stream, &mut sender, stream_mode).await?;
         }
 
         // the response stream disconnected early so we could not add `has_next = false` to the

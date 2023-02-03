@@ -21,6 +21,7 @@ use crate::graphql::Response;
 use crate::json_ext::Path;
 use crate::json_ext::Value;
 use crate::json_ext::ValueExt;
+use crate::query_planner::subscription::SubscriptionNode;
 use crate::query_planner::FlattenNode;
 use crate::query_planner::OperationKind;
 use crate::query_planner::Primary;
@@ -197,7 +198,7 @@ impl PlanNode {
                                 let mut cloned_qp = parameters.root_node.clone();
                                 cloned_qp.without_subscription();
 
-                                let current_dir = current_dir.clone();
+                                let current_dir_cloned = current_dir.clone();
                                 let context = parameters.context.clone();
                                 let service_factory = parameters.service_factory.clone();
                                 let schema = parameters.schema.clone();
@@ -205,6 +206,7 @@ impl PlanNode {
                                 let deferred_fetches = parameters.deferred_fetches.clone();
                                 let query = parameters.query.clone();
                                 let root_node = parameters.root_node.clone();
+                                let subscription_id = subscription_handle.id.clone();
 
                                 println!("Generated subscription ID: {}", subscription_handle.id);
                                 let _ = tokio::task::spawn(async move {
@@ -230,7 +232,7 @@ impl PlanNode {
                                         let (value, subselection, mut errors) = cloned_qp
                                             .execute_recursively(
                                                 &parameters,
-                                                &current_dir,
+                                                &current_dir_cloned,
                                                 &val.data.unwrap_or_default(),
                                                 sender.clone(),
                                                 None,
@@ -262,18 +264,62 @@ impl PlanNode {
                                         subscription_handle.id
                                     );
                                 });
+
+                                // TODO must be an url
+                                let callback_url =
+                                    format!("http://localhost:4000/callback/{subscription_id}");
+
+                                // TODO call the subgraph with the subscription + callback
+                                let sub_node = SubscriptionNode {
+                                    service_name: fetch_node.service_name.clone(),
+                                    variable_usages: fetch_node.variable_usages.clone(),
+                                    operation: fetch_node.operation.clone(),
+                                    operation_name: fetch_node.operation_name.clone(),
+                                    id: fetch_node.id.clone(),
+                                };
+                                let fetch_time_offset =
+                                    parameters.context.created_at.elapsed().as_nanos() as i64;
+                                match sub_node
+                                    .subscribe_callback(
+                                        parameters,
+                                        current_dir,
+                                        parent_value,
+                                        callback_url,
+                                    )
+                                    .instrument(tracing::info_span!(
+                                        FETCH_SPAN_NAME,
+                                        "otel.kind" = "INTERNAL",
+                                        "apollo.subgraph.name" = fetch_node.service_name.as_str(),
+                                        "apollo_private.sent_time_offset" = fetch_time_offset
+                                    ))
+                                    .await
+                                {
+                                    Ok(e) => {
+                                        value = Value::default();
+
+                                        errors = e;
+                                    }
+                                    Err(err) => {
+                                        value = Value::default();
+
+                                        failfast_error!(
+                                            "Subscription callback fetch error: {}",
+                                            err
+                                        );
+                                        errors = vec![
+                                            err.to_graphql_error(Some(current_dir.to_owned()))
+                                        ];
+                                    }
+                                }
                             }
                             None => {
                                 tracing::error!(
                                     "No subscription handle provided for a subscription"
                                 );
+                                value = Value::default();
+                                errors = vec![];
                             }
                         }
-
-                        // TODO call the subgraph with the subscription + callback
-
-                        value = Value::default();
-                        errors = vec![];
                     } else {
                         let fetch_time_offset =
                             parameters.context.created_at.elapsed().as_nanos() as i64;

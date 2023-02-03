@@ -85,14 +85,14 @@ pub(crate) struct FetchNode {
     pub(crate) id: Option<String>,
 }
 
-struct Variables {
-    variables: Object,
-    paths: HashMap<Path, usize>,
+pub(crate) struct Variables {
+    pub(crate) variables: Object,
+    pub(crate) paths: HashMap<Path, usize>,
 }
 
 impl Variables {
     #[instrument(skip_all, level = "debug", name = "make_variables")]
-    async fn new(
+    pub(crate) async fn new(
         requires: &[Selection],
         variable_usages: &[String],
         data: &Value,
