@@ -3,53 +3,55 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 use futures::channel::mpsc;
 use futures::channel::oneshot;
 use futures::SinkExt;
 use futures::StreamExt;
-use serde_json_bytes::Value;
 use uuid::Uuid;
 
-use crate::graphql;
-
-enum Notification {
+enum Notification<K, V> {
     Subscribe {
         // TODO use uuid
-        topic: Uuid,
+        topic: K,
         handle: Uuid,
         // Sender to send value we will receive
-        sender: mpsc::Sender<graphql::Response>,
+        sender: mpsc::Sender<V>,
     },
     Unsubscribe {
         handle: Uuid,
     },
     Delete {
-        topic: Uuid,
+        topic: K,
     },
     Publish {
-        topic: Uuid,
-        data: graphql::Response,
+        topic: K,
+        data: V,
     },
     SubscribeIfExist {
-        topic: Uuid,
+        topic: K,
         handle: Uuid,
-        sender: mpsc::Sender<graphql::Response>,
+        sender: mpsc::Sender<V>,
         response_sender: oneshot::Sender<bool>,
     },
 }
 
 #[derive(Clone)]
-pub(crate) struct Notify {
-    sender: mpsc::Sender<Notification>,
+pub(crate) struct Notify<K, V> {
+    sender: mpsc::Sender<Notification<K, V>>,
 }
 
-impl Notify {
-    pub(crate) fn new() -> Notify {
+impl<K, V> Notify<K, V>
+where
+    K: Send + Hash + Eq + Clone + 'static,
+    V: Send + Clone + 'static,
+{
+    pub(crate) fn new() -> Notify<K, V> {
         Self::default()
     }
 
-    pub(crate) async fn subscribe(&mut self, topic: Uuid) -> Handle {
+    pub(crate) async fn subscribe(&mut self, topic: K) -> Handle<K, V> {
         let (sender, receiver) = mpsc::channel(10);
         let id = Uuid::new_v4();
         let handle = Handle {
@@ -70,7 +72,7 @@ impl Notify {
         handle
     }
 
-    pub(crate) async fn subscribe_if_exist(&mut self, topic: Uuid) -> Option<Handle> {
+    pub(crate) async fn subscribe_if_exist(&mut self, topic: K) -> Option<Handle<K, V>> {
         let (sender, receiver) = mpsc::channel(10);
         let id = Uuid::new_v4();
         let handle = Handle {
@@ -96,12 +98,12 @@ impl Notify {
         }
     }
 
-    pub(crate) fn try_delete(&mut self, topic: Uuid) {
+    pub(crate) fn try_delete(&mut self, topic: K) {
         // if disconnected, we don't care (the task was stopped)
         let _ = self.sender.try_send(Notification::Delete { topic });
     }
 
-    pub(crate) async fn publish(&mut self, topic: Uuid, data: graphql::Response) {
+    pub(crate) async fn publish(&mut self, topic: K, data: V) {
         // FIXME: handle errors
         self.sender
             .send(Notification::Publish { topic, data })
@@ -109,7 +111,11 @@ impl Notify {
     }
 }
 
-impl Default for Notify {
+impl<K, V> Default for Notify<K, V>
+where
+    K: Send + Hash + Eq + Clone + 'static,
+    V: Send + Clone + 'static,
+{
     fn default() -> Self {
         let (sender, receiver) = mpsc::channel(10000);
         tokio::task::spawn(task(receiver));
@@ -117,18 +123,18 @@ impl Default for Notify {
     }
 }
 
-impl Debug for Notify {
+impl<K, V> Debug for Notify<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Notify").finish()
     }
 }
-pub(crate) struct Handle {
-    receiver: mpsc::Receiver<graphql::Response>,
+pub(crate) struct Handle<K, V> {
+    receiver: mpsc::Receiver<V>,
     id: Uuid,
-    sender: mpsc::Sender<Notification>,
+    sender: mpsc::Sender<Notification<K, V>>,
 }
 
-impl Handle {
+impl<K, V> Handle<K, V> {
     pub(crate) async fn unsubscribe(mut self) {
         // if disconnected, we don't care (the task was stopped)
         // if the channel is full, can we let it leak in the task?
@@ -138,11 +144,11 @@ impl Handle {
             .await;
     }
 
-    pub(crate) fn receiver(&mut self) -> &mut mpsc::Receiver<graphql::Response> {
+    pub(crate) fn receiver(&mut self) -> &mut mpsc::Receiver<V> {
         &mut self.receiver
     }
 
-    pub(crate) async fn publish(&mut self, topic: Uuid, data: graphql::Response) {
+    pub(crate) async fn publish(&mut self, topic: K, data: V) {
         // FIXME: handle errors
         self.sender
             .send(Notification::Publish { topic, data })
@@ -150,8 +156,12 @@ impl Handle {
     }
 }
 
-async fn task(mut receiver: mpsc::Receiver<Notification>) {
-    let mut pubsub = PubSub::default();
+async fn task<K, V>(mut receiver: mpsc::Receiver<Notification<K, V>>)
+where
+    K: Send + Hash + Eq + Clone + 'static,
+    V: Send + Clone + 'static,
+{
+    let mut pubsub: PubSub<K, V> = PubSub::default();
 
     while let Some(message) = receiver.next().await {
         match message {
@@ -171,7 +181,7 @@ async fn task(mut receiver: mpsc::Receiver<Notification>) {
                 sender,
                 response_sender,
             } => {
-                if pubsub.is_used(topic, handle) {
+                if pubsub.is_used(&topic, handle) {
                     let _ = response_sender.send(true);
                     pubsub.subscribe(topic, handle, sender).await;
                 } else {
@@ -182,19 +192,31 @@ async fn task(mut receiver: mpsc::Receiver<Notification>) {
     }
 }
 
-#[derive(Default)]
-struct PubSub {
-    subscribers: HashMap<Uuid, mpsc::Sender<graphql::Response>>,
-    subscriptions: HashMap<Uuid, HashSet<Uuid>>,
+struct PubSub<K, V>
+where
+    K: Hash + Eq,
+{
+    subscribers: HashMap<Uuid, mpsc::Sender<V>>,
+    subscriptions: HashMap<K, HashSet<Uuid>>,
 }
 
-impl PubSub {
-    async fn subscribe(
-        &mut self,
-        topic: Uuid,
-        handle: Uuid,
-        sender: mpsc::Sender<graphql::Response>,
-    ) {
+impl<K, V> Default for PubSub<K, V>
+where
+    K: Hash + Eq,
+{
+    fn default() -> Self {
+        Self {
+            subscribers: HashMap::new(),
+            subscriptions: HashMap::new(),
+        }
+    }
+}
+
+impl<K, V> PubSub<K, V>
+where
+    K: Hash + Eq + Clone,
+{
+    async fn subscribe(&mut self, topic: K, handle: Uuid, sender: mpsc::Sender<V>) {
         self.subscribers.insert(handle, sender);
         self.subscriptions
             .entry(topic)
@@ -210,7 +232,7 @@ impl PubSub {
         for (topic, handles) in &mut self.subscriptions {
             handles.remove(&handle);
             if handles.is_empty() {
-                topics_to_delete.push(*topic);
+                topics_to_delete.push(topic.clone());
             }
         }
         topics_to_delete.iter().for_each(|t| {
@@ -244,7 +266,7 @@ impl PubSub {
     }
 
     /// Check if the topic is used by anyone else than the current handle
-    fn is_used(&self, topic: Uuid, handle: Uuid) -> bool {
+    fn is_used(&self, topic: &K, handle: Uuid) -> bool {
         self.subscriptions
             .get(&topic)
             .map(|s| {
@@ -255,7 +277,7 @@ impl PubSub {
             .unwrap_or_default()
     }
 
-    async fn delete(&mut self, topic: Uuid) {
+    async fn delete(&mut self, topic: K) {
         if let Some(subscribers) = self.subscriptions.remove(&topic) {
             subscribers.into_iter().for_each(|s| {
                 self.subscribers.remove(&s);
@@ -263,7 +285,10 @@ impl PubSub {
         }
     }
 
-    async fn publish(&mut self, topic: Uuid, value: graphql::Response) -> Option<()> {
+    async fn publish(&mut self, topic: K, value: V) -> Option<()>
+    where
+        V: Clone,
+    {
         let subscribers = self.subscriptions.get(&topic)?;
         let mut fut = vec![];
         for subscriber_handle in subscribers {
@@ -287,7 +312,6 @@ impl PubSub {
                 .for_each(|(_topic, handles)| handles.retain(|h| h != &handle_to_clean));
         }
         self.subscriptions.retain(|_k, s| !s.is_empty());
-        dbg!(&self.subscriptions);
 
         Some(())
     }

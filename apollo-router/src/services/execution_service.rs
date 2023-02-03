@@ -17,7 +17,6 @@ use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
 use serde_json_bytes::Value;
-use tokio::sync::oneshot;
 use tower::BoxError;
 use tower::ServiceBuilder;
 use tower::ServiceExt;
@@ -29,6 +28,7 @@ use super::layers::allow_only_http_post_mutations::AllowOnlyHttpPostMutationsLay
 use super::new_service::ServiceFactory;
 use super::Plugins;
 use super::SubgraphServiceFactory;
+use crate::graphql;
 use crate::graphql::IncrementalResponse;
 use crate::graphql::Response;
 use crate::json_ext::Object;
@@ -49,7 +49,7 @@ pub(crate) const SUBSCRIPTION_ID_KEY_CONTEXT: &str = "query_plan::subscription_i
 pub(crate) struct ExecutionService {
     pub(crate) schema: Arc<Schema>,
     pub(crate) subgraph_service_factory: Arc<SubgraphServiceFactory>,
-    pub(crate) notify: Notify,
+    pub(crate) notify: Notify<Uuid, graphql::Response>,
 }
 
 // Used to detect when the stream is dropped and then when the client closed the connection
@@ -398,7 +398,7 @@ pub(crate) struct ExecutionServiceFactory {
     pub(crate) schema: Arc<Schema>,
     pub(crate) plugins: Arc<Plugins>,
     pub(crate) subgraph_service_factory: Arc<SubgraphServiceFactory>,
-    pub(crate) notify: Notify,
+    pub(crate) notify: Notify<Uuid, graphql::Response>,
 }
 
 impl ServiceFactory<ExecutionRequest> for ExecutionServiceFactory {

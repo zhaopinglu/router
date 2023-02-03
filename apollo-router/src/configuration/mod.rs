@@ -32,6 +32,7 @@ use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
 use thiserror::Error;
+use uuid::Uuid;
 
 use self::cors::Cors;
 use self::expansion::Expansion;
@@ -43,6 +44,7 @@ use crate::configuration::schema::Mode;
 use crate::executable::APOLLO_ROUTER_DEV_ENV;
 use crate::notification::Notify;
 use crate::plugin::plugins;
+use crate::graphql;
 
 static SUPERGRAPH_ENDPOINT_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?P<first_path>.*/)(?P<sub_path>.+)\*$")
@@ -131,7 +133,7 @@ pub struct Configuration {
     pub(crate) apollo_plugins: ApolloPlugins,
 
     #[serde(default, skip_serializing, skip_deserializing)]
-    pub(crate) notify: Notify,
+    pub(crate) notify: Notify<Uuid, graphql::Response>,
 }
 
 impl<'de> serde::Deserialize<'de> for Configuration {

@@ -13,7 +13,9 @@ use tower::BoxError;
 use tower::Service;
 use tower::ServiceBuilder;
 use tower::ServiceExt;
+use uuid::Uuid;
 
+use crate::graphql;
 use crate::graphql::Response;
 use crate::notification::Notify;
 use crate::plugin::Plugin;
@@ -29,7 +31,7 @@ pub(crate) const SUBSCRIPTION_MODE_CONTEXT_KEY: &str = "subscription::mode";
 #[derive(Debug, Clone)]
 struct Subscription {
     enabled: bool,
-    notify: Notify,
+    notify: Notify<Uuid, graphql::Response>,
     mode: SubscriptionMode,
 }
 
@@ -47,16 +49,17 @@ pub(crate) enum SubscriptionMode {
     /// Using a callback url
     #[serde(rename = "callback")]
     Callback {
+        #[schemars(with = "String")]
         /// URL used to access this router instance
         public_url: url::Url,
-        #[serde(skip_serializing)] // We don't need it in the context
+        // `skip_serializing` We don't need it in the context
         /// Listen address on which the callback must listen (default: 127.0.0.1:4000)
-        #[serde(default = "default_listen_addr")]
-        listen: ListenAddr,
-        #[serde(skip_serializing)] // We don't need it in the context
+        #[serde(skip_serializing)]
+        listen: Option<ListenAddr>,
+        // `skip_serializing` We don't need it in the context
         /// Specify on which path you want to listen for callbacks (default: /callback)
-        #[serde(default = "default_path")]
-        path: String,
+        #[serde(skip_serializing)]
+        path: Option<String>,
     },
     /// Using websocket to directly connect to subgraph
     #[serde(rename = "passthrough")]
@@ -108,12 +111,13 @@ impl Plugin for Subscription {
         let mut map = MultiMap::new();
 
         if let SubscriptionMode::Callback { listen, path, .. } = &self.mode {
+            let path = path.clone().unwrap_or_else(default_path);
             if self.enabled {
                 let endpoint = Endpoint::from_router_service(
                     format!("{}/:callback", path.trim_end_matches('/')),
                     CallbackService::new(self.notify.clone()).boxed(),
                 );
-                map.insert(listen.clone(), endpoint);
+                map.insert(listen.clone().unwrap_or_else(default_listen_addr), endpoint);
             }
         }
 
@@ -130,11 +134,11 @@ enum CallbackPayload {
 
 #[derive(Clone)]
 pub(crate) struct CallbackService {
-    notify: Notify,
+    notify: Notify<Uuid, graphql::Response>,
 }
 
 impl CallbackService {
-    pub(crate) fn new(notify: Notify) -> Self {
+    pub(crate) fn new(notify: Notify<Uuid, graphql::Response>) -> Self {
         Self { notify }
     }
 }

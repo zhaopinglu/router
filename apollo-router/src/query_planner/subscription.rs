@@ -10,6 +10,7 @@ use super::execution::ExecutionParameters;
 use super::fetch::Variables;
 use super::OperationKind;
 use crate::error::FetchError;
+use crate::graphql;
 use crate::graphql::Error;
 use crate::graphql::Request;
 use crate::graphql::Response;
@@ -25,11 +26,11 @@ use crate::services::SubgraphRequest;
 #[derive(Clone)]
 pub(crate) struct SubscriptionHandle {
     pub(crate) id: Uuid,
-    pub(crate) notify: Notify,
+    pub(crate) notify: Notify<Uuid, graphql::Response>,
 }
 
 impl SubscriptionHandle {
-    pub(crate) fn new(id: Uuid, notify: Notify) -> Self {
+    pub(crate) fn new(id: Uuid, notify: Notify<Uuid, graphql::Response>) -> Self {
         Self { id, notify }
     }
 }

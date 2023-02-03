@@ -36,7 +36,9 @@ use tower::buffer::Buffer;
 use tower::BoxError;
 use tower::Service;
 use tower::ServiceBuilder;
+use uuid::Uuid;
 
+use crate::graphql;
 use crate::layers::ServiceBuilderExt;
 use crate::notification::Notify;
 use crate::router_factory::Endpoint;
@@ -46,8 +48,11 @@ use crate::services::subgraph;
 use crate::services::supergraph;
 use crate::ListenAddr;
 
-type InstanceFactory =
-    fn(&serde_json::Value, Arc<String>, Notify) -> BoxFuture<Result<Box<dyn DynPlugin>, BoxError>>;
+type InstanceFactory = fn(
+    &serde_json::Value,
+    Arc<String>,
+    Notify<Uuid, graphql::Response>,
+) -> BoxFuture<Result<Box<dyn DynPlugin>, BoxError>>;
 
 type SchemaFactory = fn(&mut SchemaGenerator) -> schemars::schema::Schema;
 
@@ -63,7 +68,7 @@ pub struct PluginInit<T> {
     /// Router Supergraph Schema (schema definition language)
     pub supergraph_sdl: Arc<String>,
 
-    pub(crate) notify: Notify,
+    pub(crate) notify: Notify<Uuid, graphql::Response>,
 }
 
 impl<T> PluginInit<T>
@@ -71,7 +76,11 @@ where
     T: for<'de> Deserialize<'de>,
 {
     /// Create a new PluginInit for the supplied config and SDL.
-    pub(crate) fn new(config: T, supergraph_sdl: Arc<String>, notify: Notify) -> Self {
+    pub(crate) fn new(
+        config: T,
+        supergraph_sdl: Arc<String>,
+        notify: Notify<Uuid, graphql::Response>,
+    ) -> Self {
         PluginInit {
             config,
             supergraph_sdl,
@@ -86,7 +95,7 @@ where
     pub(crate) fn try_new(
         config: serde_json::Value,
         supergraph_sdl: Arc<String>,
-        notify: Notify,
+        notify: Notify<Uuid, graphql::Response>,
     ) -> Result<Self, BoxError> {
         let config: T = serde_json::from_value(config)?;
         Ok(PluginInit {
@@ -97,7 +106,7 @@ where
     }
 
     #[cfg(test)]
-    pub (crate) fn fake_new(config: T, supergraph_sdl: Arc<String>) -> Self {
+    pub(crate) fn fake_new(config: T, supergraph_sdl: Arc<String>) -> Self {
         PluginInit {
             config,
             supergraph_sdl,
@@ -151,7 +160,7 @@ impl PluginFactory {
         &self,
         configuration: &serde_json::Value,
         supergraph_sdl: Arc<String>,
-        notify: Notify,
+        notify: Notify<Uuid, graphql::Response>,
     ) -> Result<Box<dyn DynPlugin>, BoxError> {
         (self.instance_factory)(configuration, supergraph_sdl, notify).await
     }

@@ -14,6 +14,7 @@ use tower::BoxError;
 use tower::ServiceBuilder;
 use tower::ServiceExt;
 use tower_service::Service;
+use uuid::Uuid;
 use tracing_futures::Instrument;
 
 use super::layers::content_negociation;
@@ -400,7 +401,7 @@ pub(crate) struct SupergraphCreator {
     subgraph_service_factory: Arc<SubgraphServiceFactory>,
     schema: Arc<Schema>,
     plugins: Arc<Plugins>,
-    notify: Notify,
+    notify: Notify<Uuid, graphql::Response>,
 }
 
 pub(crate) trait HasPlugins {
