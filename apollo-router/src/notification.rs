@@ -322,28 +322,28 @@ mod tests {
 
     use super::*;
 
-    // #[tokio::test]
-    // async fn subscribe() {
-    //     let mut notify = Notify::new();
-    //     let topic_1 = Uuid::new_v4();
-    //     let topic_2 = Uuid::new_v4();
+    #[tokio::test]
+    async fn subscribe() {
+        let mut notify = Notify::new();
+        let topic_1 = Uuid::new_v4();
+        let topic_2 = Uuid::new_v4();
 
-    //     let handle1 = notify.subscribe(topic_1).await;
-    //     let handle2 = notify.subscribe(topic_2).await;
+        let handle1 = notify.subscribe(topic_1).await;
+        let handle2 = notify.subscribe(topic_2).await;
 
-    //     let mut handle_1_bis = notify.subscribe(topic_1).await;
-    //     let mut handle_1_other = notify.subscribe(topic_1).await;
-    //     let mut cloned_notify = notify.clone();
-    //     tokio::spawn(async move {
-    //         cloned_notify
-    //             .publish(topic_1, serde_json_bytes::json!({"test": "ok"}))
-    //             .await;
-    //     });
-    //     drop(handle1);
+        let mut handle_1_bis = notify.subscribe(topic_1).await;
+        let mut handle_1_other = notify.subscribe(topic_1).await;
+        let mut cloned_notify = notify.clone();
+        tokio::spawn(async move {
+            cloned_notify
+                .publish(topic_1, serde_json_bytes::json!({"test": "ok"}))
+                .await;
+        });
+        drop(handle1);
 
-    //     let new_msg = handle_1_bis.receiver().next().await.unwrap();
-    //     assert_eq!(new_msg, serde_json_bytes::json!({"test": "ok"}));
-    //     let new_msg = handle_1_other.receiver().next().await.unwrap();
-    //     assert_eq!(new_msg, serde_json_bytes::json!({"test": "ok"}));
-    // }
+        let new_msg = handle_1_bis.receiver().next().await.unwrap();
+        assert_eq!(new_msg, serde_json_bytes::json!({"test": "ok"}));
+        let new_msg = handle_1_other.receiver().next().await.unwrap();
+        assert_eq!(new_msg, serde_json_bytes::json!({"test": "ok"}));
+    }
 }
