@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
@@ -12,6 +13,7 @@ use serde::Serialize;
 use serde_json_bytes::Value;
 use tower::BoxError;
 use tower::Service;
+use tower::ServiceBuilder;
 use tower::ServiceExt;
 
 use crate::graphql::Response;
@@ -20,6 +22,7 @@ use crate::plugin::Plugin;
 use crate::plugin::PluginInit;
 use crate::register_plugin;
 use crate::services::router;
+use crate::services::supergraph;
 use crate::Endpoint;
 use crate::ListenAddr;
 
@@ -27,6 +30,7 @@ use crate::ListenAddr;
 struct Subscription {
     enabled: bool,
     notify: Notify,
+    mode: SubscriptionMode,
 }
 
 /// Forbid mutations configuration
@@ -68,9 +72,25 @@ impl Plugin for Subscription {
         Ok(Subscription {
             enabled: true,
             notify: init.notify,
+            mode: init.config.mode,
         })
     }
 
+    fn supergraph_service(&self, service: supergraph::BoxService) -> supergraph::BoxService {
+        if let SubscriptionMode::Callback { public_url } = &self.mode {
+            // TODO: find an actual good way
+            let url = public_url.clone();
+            ServiceBuilder::new()
+                .map_request(move |req: supergraph::Request| {
+                    req.context.insert("public_url", url.clone()).unwrap();
+                    req
+                })
+                .service(service)
+                .boxed()
+        } else {
+            service
+        }
+    }
     fn web_endpoints(&self) -> MultiMap<ListenAddr, Endpoint> {
         let mut map = MultiMap::new();
 

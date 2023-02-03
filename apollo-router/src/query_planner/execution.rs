@@ -208,6 +208,16 @@ impl PlanNode {
                                 let root_node = parameters.root_node.clone();
                                 let subscription_id = subscription_handle.id.clone();
 
+                                // TODO: hacky, fix me
+                                let public_url = context
+                                    .get("public_url")
+                                    .unwrap_or_default()
+                                    .unwrap_or_else(|| "http://localhost:4000/".to_string());
+                                let callback_url =
+                                    format!("{public_url}callback/{subscription_id}");
+
+                                dbg!(&callback_url);
+
                                 println!("Generated subscription ID: {}", subscription_handle.id);
                                 let _ = tokio::task::spawn(async move {
                                     let mut handle = subscription_handle
@@ -264,10 +274,6 @@ impl PlanNode {
                                         subscription_handle.id
                                     );
                                 });
-
-                                // TODO must be an url
-                                let callback_url =
-                                    format!("http://localhost:4000/callback/{subscription_id}");
 
                                 // TODO call the subgraph with the subscription + callback
                                 let sub_node = SubscriptionNode {
