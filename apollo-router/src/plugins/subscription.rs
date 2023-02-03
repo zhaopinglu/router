@@ -47,7 +47,10 @@ pub(crate) enum SubscriptionMode {
     // TODO add listen and path conf
     /// Using a callback url
     #[serde(rename = "callback")]
-    Callback { public_url: String },
+    Callback {
+        public_url: String,
+        listen_addr: Option<ListenAddr>,
+    },
     /// Using websocket to directly connect to subgraph
     #[serde(rename = "passthrough")]
     Passthrough,
@@ -77,7 +80,7 @@ impl Plugin for Subscription {
     }
 
     fn supergraph_service(&self, service: supergraph::BoxService) -> supergraph::BoxService {
-        if let SubscriptionMode::Callback { public_url } = &self.mode {
+        if let SubscriptionMode::Callback { public_url, .. } = &self.mode {
             // TODO: find an actual good way
             let url = public_url.clone();
             ServiceBuilder::new()
@@ -94,12 +97,17 @@ impl Plugin for Subscription {
     fn web_endpoints(&self) -> MultiMap<ListenAddr, Endpoint> {
         let mut map = MultiMap::new();
 
-        if self.enabled {
-            let endpoint = Endpoint::from_router_service(
-                String::from("/callback/:callback"),
-                CallbackService::new(self.notify.clone()).boxed(),
-            );
-            map.insert(default_listen_addr(), endpoint);
+        if let SubscriptionMode::Callback { listen_addr, .. } = &self.mode {
+            if self.enabled {
+                let endpoint = Endpoint::from_router_service(
+                    String::from("/callback/:callback"),
+                    CallbackService::new(self.notify.clone()).boxed(),
+                );
+                map.insert(
+                    listen_addr.clone().unwrap_or_else(default_listen_addr),
+                    endpoint,
+                );
+            }
         }
 
         map
