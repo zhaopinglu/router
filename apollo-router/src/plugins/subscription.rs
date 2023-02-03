@@ -1,5 +1,4 @@
 use std::str::FromStr;
-use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
@@ -10,7 +9,6 @@ use multimap::MultiMap;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json_bytes::Value;
 use tower::BoxError;
 use tower::Service;
 use tower::ServiceBuilder;
@@ -25,6 +23,8 @@ use crate::services::router;
 use crate::services::supergraph;
 use crate::Endpoint;
 use crate::ListenAddr;
+
+pub(crate) const SUBSCRIPTION_MODE_CONTEXT_KEY: &str = "subscription::mode";
 
 #[derive(Debug, Clone)]
 struct Subscription {
@@ -44,12 +44,19 @@ struct SubscriptionConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SubscriptionMode {
-    // TODO add listen and path conf
     /// Using a callback url
     #[serde(rename = "callback")]
     Callback {
-        public_url: String,
-        listen_addr: Option<ListenAddr>,
+        /// URL used to access this router instance
+        public_url: url::Url,
+        #[serde(skip_serializing)] // We don't need it in the context
+        /// Listen address on which the callback must listen (default: 127.0.0.1:4000)
+        #[serde(default = "default_listen_addr")]
+        listen: ListenAddr,
+        #[serde(skip_serializing)] // We don't need it in the context
+        /// Specify on which path you want to listen for callbacks (default: /callback)
+        #[serde(default = "default_path")]
+        path: String,
     },
     /// Using websocket to directly connect to subgraph
     #[serde(rename = "passthrough")]
@@ -61,6 +68,10 @@ impl Default for SubscriptionMode {
         // TODO change this default ?
         Self::Passthrough
     }
+}
+
+fn default_path() -> String {
+    String::from("/callback")
 }
 
 fn default_listen_addr() -> ListenAddr {
@@ -80,33 +91,29 @@ impl Plugin for Subscription {
     }
 
     fn supergraph_service(&self, service: supergraph::BoxService) -> supergraph::BoxService {
-        if let SubscriptionMode::Callback { public_url, .. } = &self.mode {
-            // TODO: find an actual good way
-            let url = public_url.clone();
-            ServiceBuilder::new()
-                .map_request(move |req: supergraph::Request| {
-                    req.context.insert("public_url", url.clone()).unwrap();
-                    req
-                })
-                .service(service)
-                .boxed()
-        } else {
-            service
-        }
+        let mode = self.mode.clone();
+        ServiceBuilder::new()
+            .map_request(move |req: supergraph::Request| {
+                req.context
+                    .insert(SUBSCRIPTION_MODE_CONTEXT_KEY, mode.clone())
+                    .unwrap();
+
+                req
+            })
+            .service(service)
+            .boxed()
     }
+
     fn web_endpoints(&self) -> MultiMap<ListenAddr, Endpoint> {
         let mut map = MultiMap::new();
 
-        if let SubscriptionMode::Callback { listen_addr, .. } = &self.mode {
+        if let SubscriptionMode::Callback { listen, path, .. } = &self.mode {
             if self.enabled {
                 let endpoint = Endpoint::from_router_service(
-                    String::from("/callback/:callback"),
+                    format!("{}/:callback", path.trim_end_matches('/')),
                     CallbackService::new(self.notify.clone()).boxed(),
                 );
-                map.insert(
-                    listen_addr.clone().unwrap_or_else(default_listen_addr),
-                    endpoint,
-                );
+                map.insert(listen.clone(), endpoint);
             }
         }
 

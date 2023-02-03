@@ -1,14 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures::future::join_all;
-use futures::pin_mut;
 use futures::prelude::*;
 use tokio::sync::broadcast::Sender;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::Instrument;
-use uuid::Uuid;
 
 use super::log;
 use super::subscription::SubscriptionHandle;
@@ -100,12 +97,12 @@ pub(crate) struct ExecutionParameters<'a> {
 }
 
 impl PlanNode {
-    fn execute_recursively<'a>(
+    pub(super) fn execute_recursively<'a>(
         &'a self,
         parameters: &'a ExecutionParameters<'a>,
         current_dir: &'a Path,
         parent_value: &'a Value,
-        mut sender: futures::channel::mpsc::Sender<Response>,
+        sender: futures::channel::mpsc::Sender<Response>,
         subscription_handle: Option<SubscriptionHandle>,
     ) -> future::BoxFuture<(Value, Option<String>, Vec<Error>)> {
         Box::pin(async move {
@@ -193,139 +190,35 @@ impl PlanNode {
                 PlanNode::Fetch(fetch_node) => {
                     if let OperationKind::Subscription = fetch_node.operation_kind() {
                         match subscription_handle {
-                            Some(mut subscription_handle) => {
-                                // TODO put this in a function
-                                let mut cloned_qp = parameters.root_node.clone();
-                                cloned_qp.without_subscription();
-
-                                let current_dir_cloned = current_dir.clone();
-                                let context = parameters.context.clone();
-                                let service_factory = parameters.service_factory.clone();
-                                let schema = parameters.schema.clone();
-                                let supergraph_request = parameters.supergraph_request.clone();
-                                let deferred_fetches = parameters.deferred_fetches.clone();
-                                let query = parameters.query.clone();
-                                let root_node = parameters.root_node.clone();
-                                let subscription_id = subscription_handle.id.clone();
-
-                                // TODO: hacky, fix me
-                                let public_url = context
-                                    .get("public_url")
-                                    .unwrap_or_default()
-                                    .unwrap_or_else(|| "http://localhost:4000/".to_string());
-                                let callback_url =
-                                    format!("{public_url}callback/{subscription_id}");
-
-                                dbg!(&callback_url);
-
-                                println!("Generated subscription ID: {}", subscription_handle.id);
-                                let _ = tokio::task::spawn(async move {
-                                    let mut handle = subscription_handle
-                                        .notify
-                                        .subscribe(subscription_handle.id)
-                                        .await;
-                                    let receiver = handle.receiver();
-                                    let cloned_qp = cloned_qp;
-                                    let parameters = ExecutionParameters {
-                                        context: &context,
-                                        service_factory: &service_factory,
-                                        schema: &schema,
-                                        supergraph_request: &supergraph_request,
-                                        deferred_fetches: &deferred_fetches,
-                                        query: &query,
-                                        root_node: &root_node,
-                                    };
-
-                                    // Take the remaining query plan
-
-                                    while let Some(mut val) = receiver.next().await {
-                                        let (value, subselection, mut errors) = cloned_qp
-                                            .execute_recursively(
-                                                &parameters,
-                                                &current_dir_cloned,
-                                                &val.data.unwrap_or_default(),
-                                                sender.clone(),
-                                                None,
-                                            )
-                                            .await;
-                                        errors.append(&mut val.errors);
-                                        // TODO: Re-Execute the query plan after subscription to aggregate data
-                                        if let Err(err) = sender
-                                            .send(
-                                                Response::builder()
-                                                    .data(value)
-                                                    .subscribed(true)
-                                                    .and_subselection(subselection)
-                                                    .errors(errors)
-                                                    .extensions(val.extensions)
-                                                    .and_path(val.path)
-                                                    .build(),
-                                            )
-                                            .await
-                                        {
-                                            tracing::error!(
-                                                "cannot send the subscription to the client: {err:?}"
-                                            );
-                                            break;
-                                        }
-                                    }
-                                    tracing::trace!(
-                                        "Leaving the task for subscription {}",
-                                        subscription_handle.id
-                                    );
-                                });
-
-                                // TODO call the subgraph with the subscription + callback
+                            Some(subscription_handle) => {
                                 let sub_node = SubscriptionNode {
                                     service_name: fetch_node.service_name.clone(),
                                     variable_usages: fetch_node.variable_usages.clone(),
                                     operation: fetch_node.operation.clone(),
                                     operation_name: fetch_node.operation_name.clone(),
-                                    id: fetch_node.id.clone(),
                                 };
-                                let fetch_time_offset =
-                                    parameters.context.created_at.elapsed().as_nanos() as i64;
-                                match sub_node
-                                    .subscribe_callback(
+
+                                errors = sub_node
+                                    .execute_recursively(
                                         parameters,
                                         current_dir,
                                         parent_value,
-                                        callback_url,
+                                        sender,
+                                        subscription_handle,
                                     )
-                                    .instrument(tracing::info_span!(
-                                        FETCH_SPAN_NAME,
-                                        "otel.kind" = "INTERNAL",
-                                        "apollo.subgraph.name" = fetch_node.service_name.as_str(),
-                                        "apollo_private.sent_time_offset" = fetch_time_offset
-                                    ))
-                                    .await
-                                {
-                                    Ok(e) => {
-                                        value = Value::default();
-
-                                        errors = e;
-                                    }
-                                    Err(err) => {
-                                        value = Value::default();
-
-                                        failfast_error!(
-                                            "Subscription callback fetch error: {}",
-                                            err
-                                        );
-                                        errors = vec![
-                                            err.to_graphql_error(Some(current_dir.to_owned()))
-                                        ];
-                                    }
-                                }
+                                    .await;
                             }
                             None => {
                                 tracing::error!(
                                     "No subscription handle provided for a subscription"
                                 );
-                                value = Value::default();
-                                errors = vec![];
+                                errors = vec![Error::builder()
+                                    .message("no subscription handle provided for a subscription")
+                                    .extension_code("NO_SUBSCRIPTION_HANDLE")
+                                    .build()];
                             }
                         }
+                        value = Value::default();
                     } else {
                         let fetch_time_offset =
                             parameters.context.created_at.elapsed().as_nanos() as i64;

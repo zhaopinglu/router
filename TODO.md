@@ -1,2 +1,1 @@
-
-+ Add support of callback url to the subgraph 
+Generify the notification file
