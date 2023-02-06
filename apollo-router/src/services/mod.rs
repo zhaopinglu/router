@@ -75,6 +75,5 @@ pub(crate) const MULTIPART_DEFER_SPEC_PARAMETER: &str = "deferSpec";
 pub(crate) const MULTIPART_DEFER_SPEC_VALUE: &str = "20220824";
 pub(crate) const MULTIPART_DEFER_CONTENT_TYPE: &str =
     "multipart/mixed;boundary=\"graphql\";deferSpec=20220824";
-    
-pub(crate) const MULTIPART_SUBSCRIPTION_CONTENT_TYPE: &str =
-    "multipart/mixed;boundary=\"graphql\"";
+
+pub(crate) const MULTIPART_SUBSCRIPTION_CONTENT_TYPE: &str = "multipart/mixed;boundary=\"graphql\"";

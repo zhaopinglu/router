@@ -11,9 +11,9 @@ mod bridge_query_planner;
 mod caching_query_planner;
 mod execution;
 pub(crate) mod fetch;
-pub(crate) mod subscription;
 mod plan;
 mod selection;
+pub(crate) mod subscription;
 pub use plan::*;
 
 pub(crate) const FETCH_SPAN_NAME: &str = "fetch";

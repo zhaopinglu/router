@@ -14,8 +14,8 @@ use tower::BoxError;
 use tower::ServiceBuilder;
 use tower::ServiceExt;
 use tower_service::Service;
-use uuid::Uuid;
 use tracing_futures::Instrument;
+use uuid::Uuid;
 
 use super::layers::content_negociation;
 use super::layers::content_negociation::ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY;
