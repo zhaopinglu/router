@@ -18,6 +18,7 @@ use crate::http_ext;
 use crate::json_ext::Object;
 use crate::json_ext::Path;
 use crate::notification::Notify;
+use crate::plugins::subscription::CallbackMode;
 use crate::plugins::subscription::SubscriptionMode;
 use crate::plugins::subscription::SUBSCRIPTION_MODE_CONTEXT_KEY;
 use crate::query_planner::FETCH_SPAN_NAME;
@@ -78,7 +79,7 @@ impl SubscriptionNode {
         Box::pin(async move {
             match mode {
                 SubscriptionMode::Passthrough => todo!(),
-                SubscriptionMode::Callback { public_url, .. } => {
+                SubscriptionMode::Callback(CallbackMode { public_url, .. }) => {
                     let mut cloned_qp = parameters.root_node.clone();
                     // FIXME: Trick, should not exist with the correct qp implementation
                     cloned_qp.without_subscription();
@@ -107,10 +108,20 @@ impl SubscriptionNode {
 
                     tracing::trace!("Generated subscription ID: {}", subscription_handle.id);
                     let _ = tokio::task::spawn(async move {
-                        let mut handle = subscription_handle
+                        let mut handle = match subscription_handle
                             .notify
                             .subscribe(subscription_handle.id)
-                            .await;
+                            .await
+                        {
+                            Ok(handle) => handle,
+                            Err(err) => {
+                                tracing::error!(
+                                    "cannot subscribe for subscription id {}: {err:?}",
+                                    subscription_handle.id
+                                );
+                                return;
+                            }
+                        };
                         let receiver = handle.receiver();
                         let cloned_qp = cloned_qp;
                         let parameters = ExecutionParameters {

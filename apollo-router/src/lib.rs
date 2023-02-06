@@ -79,6 +79,7 @@ pub use crate::configuration::ListenAddr;
 pub use crate::context::Context;
 pub use crate::executable::main;
 pub use crate::executable::Executable;
+pub use crate::notification::Notify;
 pub use crate::router::ApolloRouterError;
 pub use crate::router::ConfigurationSource;
 pub use crate::router::RouterHttpServer;
@@ -102,6 +103,8 @@ pub mod _private {
     // For tests
     pub use crate::plugins::telemetry::Telemetry as TelemetryPlugin;
     pub use crate::router_factory::create_test_service_factory_from_yaml;
+    use crate::Configuration;
+    use crate::Notify;
 
     /// Retuns the `Debug` fomatting of two `Result<Schema, SchemaError>`,
     /// from `parse_with_ast` and `parse_with_hir` respectively.
@@ -109,7 +112,10 @@ pub mod _private {
     /// The two strings are expected to be equal.
     pub fn compare_schema_parsing(schema: &str) -> (String, String) {
         use crate::spec::Schema;
-        let conf = Default::default();
+        let conf = Configuration::builder()
+            .notify(Notify::noop())
+            .build()
+            .unwrap();
         (
             format!("{:?}", Schema::parse_with_ast(schema, &conf)),
             format!("{:?}", Schema::parse_with_hir(schema, &conf)),
@@ -127,7 +133,10 @@ pub mod _private {
         use crate::spec::Schema;
 
         static DUMMY_SCHEMA: OnceCell<Schema> = OnceCell::new();
-        let conf = Default::default();
+        let conf = Configuration::builder()
+            .notify(Notify::noop())
+            .build()
+            .unwrap();
         let schema = DUMMY_SCHEMA.get_or_init(|| {
             Schema::parse(include_str!("testdata/minimal_supergraph.graphql"), &conf).unwrap()
         });

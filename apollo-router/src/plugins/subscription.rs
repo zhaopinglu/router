@@ -39,7 +39,9 @@ struct Subscription {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields, default)]
 struct SubscriptionConfig {
+    /// Enable subscription support
     enabled: bool,
+    /// Select a subscription mode (callback or passthrough)
     mode: SubscriptionMode,
 }
 
@@ -48,22 +50,26 @@ struct SubscriptionConfig {
 pub(crate) enum SubscriptionMode {
     /// Using a callback url
     #[serde(rename = "callback")]
-    Callback {
-        #[schemars(with = "String")]
-        /// URL used to access this router instance
-        public_url: url::Url,
-        // `skip_serializing` We don't need it in the context
-        /// Listen address on which the callback must listen (default: 127.0.0.1:4000)
-        #[serde(skip_serializing)]
-        listen: Option<ListenAddr>,
-        // `skip_serializing` We don't need it in the context
-        /// Specify on which path you want to listen for callbacks (default: /callback)
-        #[serde(skip_serializing)]
-        path: Option<String>,
-    },
+    Callback(CallbackMode),
     /// Using websocket to directly connect to subgraph
     #[serde(rename = "passthrough")]
     Passthrough,
+}
+
+/// Using a callback url
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct CallbackMode {
+    #[schemars(with = "String")]
+    /// URL used to access this router instance
+    pub(crate) public_url: url::Url,
+    // `skip_serializing` We don't need it in the context
+    /// Listen address on which the callback must listen (default: 127.0.0.1:4000)
+    #[serde(skip_serializing)]
+    listen: Option<ListenAddr>,
+    // `skip_serializing` We don't need it in the context
+    /// Specify on which path you want to listen for callbacks (default: /callback)
+    #[serde(skip_serializing)]
+    path: Option<String>,
 }
 
 impl Default for SubscriptionMode {
@@ -110,7 +116,7 @@ impl Plugin for Subscription {
     fn web_endpoints(&self) -> MultiMap<ListenAddr, Endpoint> {
         let mut map = MultiMap::new();
 
-        if let SubscriptionMode::Callback { listen, path, .. } = &self.mode {
+        if let SubscriptionMode::Callback(CallbackMode { listen, path, .. }) = &self.mode {
             let path = path.clone().unwrap_or_else(default_path);
             if self.enabled {
                 let endpoint = Endpoint::from_router_service(
@@ -206,7 +212,7 @@ impl Service<router::Request> for CallbackService {
                         }
                     };
 
-                    handle.publish(sub_id, data).await;
+                    handle.publish(sub_id, data).await?;
                 }
             }
 

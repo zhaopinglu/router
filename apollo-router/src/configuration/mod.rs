@@ -42,9 +42,9 @@ pub(crate) use self::schema::generate_upgrade;
 use crate::cache::DEFAULT_CACHE_CAPACITY;
 use crate::configuration::schema::Mode;
 use crate::executable::APOLLO_ROUTER_DEV_ENV;
+use crate::graphql;
 use crate::notification::Notify;
 use crate::plugin::plugins;
-use crate::graphql;
 
 static SUPERGRAPH_ENDPOINT_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?P<first_path>.*/)(?P<sub_path>.+)\*$")
@@ -201,6 +201,7 @@ impl Configuration {
         apollo_plugins: Map<String, Value>,
         dev: Option<bool>,
         tls: Option<Tls>,
+        notify: Option<Notify<Uuid, graphql::Response>>,
     ) -> Result<Self, ConfigurationError> {
         let mut conf = Self {
             validated_yaml: Default::default(),
@@ -217,7 +218,10 @@ impl Configuration {
                 plugins: apollo_plugins,
             },
             tls: tls.unwrap_or_default(),
-            notify: Notify::new(),
+            #[cfg(test)]
+            notify: notify.unwrap_or_default(),
+            #[cfg(not(test))]
+            notify: notify.unwrap_or_else(Notify::new),
         };
         if dev.unwrap_or_default()
             || std::env::var(APOLLO_ROUTER_DEV_ENV).ok().as_deref() == Some("true")
@@ -332,6 +336,7 @@ impl Configuration {
         apollo_plugins: Map<String, Value>,
         dev: Option<bool>,
         tls: Option<Tls>,
+        notify: Option<Notify<Uuid, graphql::Response>>,
     ) -> Result<Self, ConfigurationError> {
         let mut configuration = Self {
             validated_yaml: Default::default(),
@@ -348,7 +353,7 @@ impl Configuration {
                 plugins: apollo_plugins,
             },
             tls: tls.unwrap_or_default(),
-            notify: Notify::new(),
+            notify: notify.unwrap_or_default(),
         };
         if dev.unwrap_or_default()
             || std::env::var(APOLLO_ROUTER_DEV_ENV).ok().as_deref() == Some("true")

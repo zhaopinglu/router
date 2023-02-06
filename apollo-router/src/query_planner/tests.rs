@@ -17,7 +17,6 @@ use super::Primary;
 use super::QueryPlan;
 use crate::json_ext::Path;
 use crate::json_ext::PathElement;
-use crate::notification::Notify;
 use crate::plugin;
 use crate::plugin::test::MockSubgraph;
 use crate::query_planner;
@@ -109,7 +108,7 @@ async fn mock_subgraph_service_withf_panics_should_be_reported_as_service_closed
             &Default::default(),
             &Arc::new(Schema::parse(test_schema!(), &Default::default()).unwrap()),
             sender,
-            Notify::default(), // FIXME
+            None,
         )
         .await;
     assert_eq!(result.errors.len(), 1);
@@ -167,7 +166,7 @@ async fn fetch_includes_operation_name() {
             &Default::default(),
             &Arc::new(Schema::parse(test_schema!(), &Default::default()).unwrap()),
             sender,
-            Notify::default(), // FIXME
+            None,
         )
         .await;
 
@@ -222,7 +221,7 @@ async fn fetch_makes_post_requests() {
             &Default::default(),
             &Arc::new(Schema::parse(test_schema!(), &Default::default()).unwrap()),
             sender,
-            Notify::default(), // FIXME
+            None,
         )
         .await;
 
@@ -362,8 +361,8 @@ async fn defer() {
             &Default::default(),
             &schema,
             sender,
-            Notify::default(),
-        ) // FIXME)
+            None,
+        )
         .await;
 
     // primary response
@@ -444,7 +443,6 @@ async fn defer_if_condition() {
         )])),
         plugins: Default::default(),
     });
-    let notify = Notify::new(); //FIXME
     let defer_primary_response = query_plan
         .execute(
             &Context::new(),
@@ -460,7 +458,7 @@ async fn defer_if_condition() {
             ),
             &schema,
             sender,
-            notify.clone(),
+            None,
         )
         .await;
 
@@ -479,7 +477,7 @@ async fn defer_if_condition() {
             &Default::default(),
             &schema,
             default_sender,
-            notify.clone(),
+            None,
         )
         .await;
 
@@ -504,7 +502,7 @@ async fn defer_if_condition() {
             ),
             &schema,
             sender,
-            notify.clone(),
+            None,
         )
         .await;
     insta::assert_json_snapshot!(defer_disabled);
@@ -622,7 +620,7 @@ async fn dependent_mutations() {
             &Default::default(),
             &Arc::new(Schema::parse(schema, &Default::default()).unwrap()),
             sender,
-            Notify::default(), //FIXME
+            None,
         )
         .await;
 }

@@ -75,16 +75,13 @@ impl<T> PluginInit<T>
 where
     T: for<'de> Deserialize<'de>,
 {
+    #[deprecated = "use PluginInit::builder() instead"]
     /// Create a new PluginInit for the supplied config and SDL.
-    pub(crate) fn new(
-        config: T,
-        supergraph_sdl: Arc<String>,
-        notify: Notify<Uuid, graphql::Response>,
-    ) -> Self {
+    pub fn new(config: T, supergraph_sdl: Arc<String>) -> Self {
         PluginInit {
             config,
             supergraph_sdl,
-            notify,
+            notify: Notify::new(),
         }
     }
 
@@ -110,7 +107,41 @@ where
         PluginInit {
             config,
             supergraph_sdl,
-            notify: Notify::default(), //FIXME
+            notify: Notify::new(), //FIXME
+        }
+    }
+}
+
+#[buildstructor::buildstructor]
+impl<T> PluginInit<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    /// Create a new PluginInit builder
+    #[builder(entry = "builder", exit = "build", visibility = "pub")]
+    fn new_builder(
+        config: T,
+        supergraph_sdl: Arc<String>,
+        notify: Notify<Uuid, graphql::Response>,
+    ) -> Self {
+        PluginInit {
+            config,
+            supergraph_sdl,
+            notify,
+        }
+    }
+
+    /// Create a new PluginInit builder
+    #[builder(entry = "fake_builder", exit = "build", visibility = "pub")]
+    fn fake_new_builder(
+        config: T,
+        supergraph_sdl: Option<Arc<String>>,
+        notify: Option<Notify<Uuid, graphql::Response>>,
+    ) -> Self {
+        PluginInit {
+            config,
+            supergraph_sdl: supergraph_sdl.unwrap_or_default(),
+            notify: notify.unwrap_or_else(Notify::noop),
         }
     }
 }

@@ -6,10 +6,13 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use futures::channel::mpsc;
+use futures::channel::mpsc::SendError;
 use futures::channel::oneshot;
 use futures::SinkExt;
 use futures::StreamExt;
 use uuid::Uuid;
+
+pub(crate) type NotifyError = SendError;
 
 enum Notification<K, V> {
     Subscribe {
@@ -37,8 +40,9 @@ enum Notification<K, V> {
     },
 }
 
+/// In memory pub/sub implementation
 #[derive(Clone)]
-pub(crate) struct Notify<K, V> {
+pub struct Notify<K, V> {
     sender: mpsc::Sender<Notification<K, V>>,
 }
 
@@ -48,10 +52,12 @@ where
     V: Send + Clone + 'static,
 {
     pub(crate) fn new() -> Notify<K, V> {
-        Self::default()
+        let (sender, receiver) = mpsc::channel(10000);
+        tokio::task::spawn(task(receiver));
+        Notify { sender }
     }
 
-    pub(crate) async fn subscribe(&mut self, topic: K) -> Handle<K, V> {
+    pub(crate) async fn subscribe(&mut self, topic: K) -> Result<Handle<K, V>, NotifyError> {
         let (sender, receiver) = mpsc::channel(10);
         let id = Uuid::new_v4();
         let handle = Handle {
@@ -60,16 +66,15 @@ where
             sender: self.sender.clone(),
         };
 
-        // FIXME: handle errors
         self.sender
             .send(Notification::Subscribe {
                 handle: handle.id,
                 topic,
                 sender,
             })
-            .await;
+            .await?;
 
-        handle
+        Ok(handle)
     }
 
     pub(crate) async fn subscribe_if_exist(&mut self, topic: K) -> Option<Handle<K, V>> {
@@ -103,23 +108,32 @@ where
         let _ = self.sender.try_send(Notification::Delete { topic });
     }
 
-    pub(crate) async fn publish(&mut self, topic: K, data: V) {
-        // FIXME: handle errors
+    #[allow(dead_code)]
+    pub(crate) async fn publish(&mut self, topic: K, data: V) -> Result<(), NotifyError> {
         self.sender
             .send(Notification::Publish { topic, data })
-            .await;
+            .await?;
+
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    /// Useless notify mainly for test
+    pub fn noop() -> Self {
+        let (sender, _receiver) = mpsc::channel(2);
+        Notify { sender }
     }
 }
 
+#[cfg(test)]
 impl<K, V> Default for Notify<K, V>
 where
     K: Send + Hash + Eq + Clone + 'static,
     V: Send + Clone + 'static,
 {
+    /// Useless notify mainly for test
     fn default() -> Self {
-        let (sender, receiver) = mpsc::channel(10000);
-        tokio::task::spawn(task(receiver));
-        Notify { sender }
+        Self::noop()
     }
 }
 
@@ -135,6 +149,7 @@ pub(crate) struct Handle<K, V> {
 }
 
 impl<K, V> Handle<K, V> {
+    #[allow(dead_code)]
     pub(crate) async fn unsubscribe(mut self) {
         // if disconnected, we don't care (the task was stopped)
         // if the channel is full, can we let it leak in the task?
@@ -148,11 +163,13 @@ impl<K, V> Handle<K, V> {
         &mut self.receiver
     }
 
-    pub(crate) async fn publish(&mut self, topic: K, data: V) {
+    pub(crate) async fn publish(&mut self, topic: K, data: V) -> Result<(), NotifyError> {
         // FIXME: handle errors
         self.sender
             .send(Notification::Publish { topic, data })
-            .await;
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -240,35 +257,10 @@ where
         });
     }
 
-    async fn recycle(&mut self) {
-        let mut subs_to_delete = HashSet::new();
-        self.subscribers.retain(|sub_id, sub_chan| {
-            if sub_chan.is_closed() {
-                subs_to_delete.insert(*sub_id);
-                false
-            } else {
-                true
-            }
-        });
-
-        self.subscriptions = self
-            .subscriptions
-            .drain()
-            .into_iter()
-            .filter_map(|(topic, mut subscribers)| {
-                subscribers = subscribers
-                    .symmetric_difference(&subs_to_delete)
-                    .cloned()
-                    .collect();
-                (!subscribers.is_empty()).then_some((topic, subscribers))
-            })
-            .collect();
-    }
-
     /// Check if the topic is used by anyone else than the current handle
     fn is_used(&self, topic: &K, handle: Uuid) -> bool {
         self.subscriptions
-            .get(&topic)
+            .get(topic)
             .map(|s| {
                 !s.difference(&[handle].into())
                     .collect::<HashSet<&Uuid>>()
@@ -328,16 +320,17 @@ mod tests {
         let topic_1 = Uuid::new_v4();
         let topic_2 = Uuid::new_v4();
 
-        let handle1 = notify.subscribe(topic_1).await;
-        let handle2 = notify.subscribe(topic_2).await;
+        let handle1 = notify.subscribe(topic_1).await.unwrap();
+        let _handle2 = notify.subscribe(topic_2).await.unwrap();
 
-        let mut handle_1_bis = notify.subscribe(topic_1).await;
-        let mut handle_1_other = notify.subscribe(topic_1).await;
+        let mut handle_1_bis = notify.subscribe(topic_1).await.unwrap();
+        let mut handle_1_other = notify.subscribe(topic_1).await.unwrap();
         let mut cloned_notify = notify.clone();
         tokio::spawn(async move {
             cloned_notify
                 .publish(topic_1, serde_json_bytes::json!({"test": "ok"}))
-                .await;
+                .await
+                .unwrap();
         });
         drop(handle1);
 

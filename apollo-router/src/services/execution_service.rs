@@ -12,7 +12,6 @@ use futures::channel::mpsc::SendError;
 use futures::channel::mpsc::Sender;
 use futures::future::BoxFuture;
 use futures::stream::once;
-use futures::FutureExt;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
@@ -171,10 +170,6 @@ impl Service<ExecutionRequest> for ExecutionService {
                     });
 
                     match (response.path.as_ref(), response.data.as_ref()) {
-                        // For subscription we don't provide a path
-                        (None, Some(_)) => {
-                            ready(Some(response))
-                        }
                         (None, _) | (_, None) => {
                             if is_deferred {
                                 response.has_next = Some(has_next);

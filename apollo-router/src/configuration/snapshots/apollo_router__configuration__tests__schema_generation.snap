@@ -782,6 +782,75 @@ expression: "&schema"
       },
       "additionalProperties": false
     },
+    "subscription": {
+      "description": "Forbid mutations configuration",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Enable subscription support",
+          "default": false,
+          "type": "boolean"
+        },
+        "mode": {
+          "description": "Select a subscription mode (callback or passthrough)",
+          "default": "passthrough",
+          "oneOf": [
+            {
+              "description": "Using a callback url",
+              "type": "object",
+              "required": [
+                "callback"
+              ],
+              "properties": {
+                "callback": {
+                  "description": "Using a callback url",
+                  "type": "object",
+                  "required": [
+                    "public_url"
+                  ],
+                  "properties": {
+                    "listen": {
+                      "description": "Listen address on which the callback must listen (default: 127.0.0.1:4000)",
+                      "writeOnly": true,
+                      "anyOf": [
+                        {
+                          "description": "Socket address.",
+                          "type": "string"
+                        },
+                        {
+                          "description": "Unix socket.",
+                          "type": "string"
+                        }
+                      ],
+                      "nullable": true
+                    },
+                    "path": {
+                      "description": "Specify on which path you want to listen for callbacks (default: /callback)",
+                      "writeOnly": true,
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "public_url": {
+                      "description": "URL used to access this router instance",
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "description": "Using websocket to directly connect to subgraph",
+              "type": "string",
+              "enum": [
+                "passthrough"
+              ]
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "supergraph": {
       "description": "Configuration for the supergraph",
       "default": {
