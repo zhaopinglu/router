@@ -119,6 +119,15 @@ impl SubscriptionNode {
                                     "cannot subscribe for subscription id {}: {err:?}",
                                     subscription_handle.id
                                 );
+                                let _ = sender
+                                .send(
+                                    Response::builder()
+                                        .errors(vec![
+                                            Error::builder().message(format!("cannot subscribe for subscription id {}: {err:?}", subscription_handle.id)).extension_code("SUBSCRIPTION_ID_NOT_FOUND").build()
+                                        ])
+                                        .build(),
+                                )
+                                .await;
                                 return;
                             }
                         };

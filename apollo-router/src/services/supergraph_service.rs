@@ -204,12 +204,20 @@ where
                 && !accepts_multipart_defer
                 && !accepts_multipart_subscription
             {
-                let mut response = SupergraphResponse::new_from_graphql_response(graphql::Response::builder()
-                    .errors(vec![crate::error::Error::builder()
-                        .message(String::from("the router received a query with the @defer directive but the client does not accept multipart/mixed HTTP responses. To enable @defer support, add the HTTP header 'Accept: multipart/mixed; deferSpec=20220824'"))
-                        .extension_code("DEFER_BAD_HEADER")
-                        .build()])
-                    .build(), context);
+                let (error_message, error_code) = if is_deferred {
+                    (String::from("the router received a query with the @defer directive but the client does not accept multipart/mixed HTTP responses. To enable @defer support, add the HTTP header 'Accept: multipart/mixed; deferSpec=20220824'"), "DEFER_BAD_HEADER")
+                } else {
+                    (String::from("the router received a query with a subscription but the client does not accept multipart/mixed HTTP responses. To enable subscription support, add the HTTP header 'Accept: multipart/mixed; boundary=graphql'"), "SUBSCRIPTION_BAD_HEADER")
+                };
+                let mut response = SupergraphResponse::new_from_graphql_response(
+                    graphql::Response::builder()
+                        .errors(vec![crate::error::Error::builder()
+                            .message(error_message)
+                            .extension_code(error_code)
+                            .build()])
+                        .build(),
+                    context,
+                );
                 *response.response.status_mut() = StatusCode::NOT_ACCEPTABLE;
                 Ok(response)
             } else if let Some(err) = plan.query.validate_variables(body, &schema).err() {
@@ -530,6 +538,7 @@ impl ServiceFactory<supergraph::Request> for MockSupergraphCreator {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
 
     use super::*;
     use crate::plugin::test::MockSubgraph;
@@ -558,6 +567,11 @@ mod tests {
    type Query {
        currentUser: User @join__field(graph: USER)
    }
+
+   type Subscription @join__type(graph: USER) {
+        userWasCreated: User
+   }
+   
    type User
    @join__owner(graph: USER)
    @join__type(graph: ORGA, key: "id")
@@ -1047,6 +1061,101 @@ mod tests {
         insta::assert_json_snapshot!(res);
 
         insta::assert_json_snapshot!(stream.next_response().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn subscription_with_callback() {
+        let subgraphs = MockedSubgraphs([
+            ("user", MockSubgraph::builder().with_json(
+                    serde_json::json!{{"query":"subscription{userWasCreated{name activeOrganization{__typename id}}}", "extensions": {"callback_url": "http://localhost:4545/callback/subscription_id"}}},
+                    serde_json::json!{{"data": {"userWasCreated": { "__typename": "User", "id": "1", "activeOrganization": { "__typename": "Organization", "id": "0" } }}}}
+                ).build()),
+            ("orga", MockSubgraph::builder().with_json(
+                serde_json::json!{{
+                    "query":"query($representations:[_Any!]!){_entities(representations:$representations){...on Organization{suborga{id name}}}}",
+                    "variables": {
+                        "representations":[{"__typename": "Organization", "id":"0"}]
+                    }
+                }},
+                serde_json::json!{{
+                    "data": {
+                        "_entities": [{ "suborga": [
+                        { "__typename": "Organization", "id": "1", "name": "A"},
+                        { "__typename": "Organization", "id": "2", "name": "B"},
+                        { "__typename": "Organization", "id": "3", "name": "C"},
+                        ] }]
+                    },
+                    }}
+            ).build())
+        ].into_iter().collect());
+        let mut notify = Notify::new();
+        let mut configuration: Configuration = serde_json::from_value(serde_json::json!({"include_subgraph_errors": { "all": true }, "subscription": { "enabled": true, "mode": {"callback": {"public_url": "http://localhost:4545"}}}})).unwrap();
+        configuration.notify = notify.clone();
+        let service = TestHarness::builder()
+            .configuration(Arc::new(configuration))
+            .schema(SCHEMA)
+            .extra_plugin(subgraphs)
+            .build_supergraph()
+            .await
+            .unwrap();
+
+        let request = supergraph::Request::fake_builder()
+            .query(
+                "subscription { userWasCreated { name activeOrganization { id  suborga { id name } } } }",
+            )
+            .context(subscription_context())
+            .build()
+            .unwrap();
+
+        let mut stream = service.oneshot(request).await.unwrap();
+        let res = stream.next_response().await.unwrap();
+        assert_eq!(
+            res.data.as_ref().unwrap().get("userWasCreated"),
+            Some(&serde_json_bytes::Value::Null)
+        );
+        insta::assert_json_snapshot!(res);
+
+        notify.broadcast(graphql::Response::builder().data(serde_json_bytes::json!({"userWasCreated": { "name": "test", "activeOrganization": { "__typename": "Organization", "id": "0" }}})).build()).await.unwrap();
+        insta::assert_json_snapshot!(stream.next_response().await.unwrap());
+        // error happened
+        notify
+            .broadcast(
+                graphql::Response::builder()
+                    .error(
+                        graphql::Error::builder()
+                            .message("cannot fetch the name")
+                            .extension_code("INVALID")
+                            .build(),
+                    )
+                    .build(),
+            )
+            .await
+            .unwrap();
+        insta::assert_json_snapshot!(stream.next_response().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn subscription_without_header() {
+        let subgraphs = MockedSubgraphs(HashMap::new());
+        let configuration: Configuration = serde_json::from_value(serde_json::json!({"include_subgraph_errors": { "all": true }, "subscription": { "enabled": true, "mode": {"callback": {"public_url": "http://localhost:4545"}}}})).unwrap();
+        let service = TestHarness::builder()
+            .configuration(Arc::new(configuration))
+            .schema(SCHEMA)
+            .extra_plugin(subgraphs)
+            .build_supergraph()
+            .await
+            .unwrap();
+
+        let request = supergraph::Request::fake_builder()
+            .query(
+                "subscription { userWasCreated { name activeOrganization { id  suborga { id name } } } }",
+            )
+            .build()
+            .unwrap();
+
+        let mut stream = service.oneshot(request).await.unwrap();
+        let res = stream.next_response().await.unwrap();
+        insta::assert_json_snapshot!(res);
     }
 
     #[tokio::test]
@@ -1558,6 +1667,14 @@ mod tests {
         let context = Context::new();
         context
             .insert(ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY, true)
+            .unwrap();
+        context
+    }
+
+    fn subscription_context() -> Context {
+        let context = Context::new();
+        context
+            .insert(ACCEPTS_MULTIPART_SUBSCRIPTION_CONTEXT_KEY, true)
             .unwrap();
         context
     }

@@ -133,7 +133,7 @@ impl Plugin for Subscription {
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "kind", rename = "lowercase")]
-enum CallbackPayload {
+pub(crate) enum CallbackPayload {
     #[serde(rename = "subscription")]
     Subscription { data: Response },
 }

@@ -38,6 +38,10 @@ enum Notification<K, V> {
         sender: mpsc::Sender<V>,
         response_sender: oneshot::Sender<bool>,
     },
+    #[cfg(test)]
+    Broadcast {
+        data: V,
+    },
 }
 
 /// In memory pub/sub implementation
@@ -123,6 +127,14 @@ where
         let (sender, _receiver) = mpsc::channel(2);
         Notify { sender }
     }
+
+    // Only for tests
+    #[cfg(test)]
+    pub(crate) async fn broadcast(&mut self, data: V) -> Result<(), NotifyError> {
+        self.sender.send(Notification::Broadcast { data }).await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +216,10 @@ where
                 } else {
                     let _ = response_sender.send(false);
                 }
+            }
+            #[cfg(test)]
+            Notification::Broadcast { data } => {
+                pubsub.broadcast(data).await;
             }
         }
     }
@@ -293,6 +309,39 @@ where
                         .is_err()
                         .then_some(*subscriber_handle)
                 });
+            }
+        }
+        // clean closed sender
+        let handles_to_clean = futures::future::join_all(fut).await.into_iter().flatten();
+        for handle_to_clean in handles_to_clean {
+            self.subscribers.remove(&handle_to_clean);
+            self.subscriptions
+                .iter_mut()
+                .for_each(|(_topic, handles)| handles.retain(|h| h != &handle_to_clean));
+        }
+        self.subscriptions.retain(|_k, s| !s.is_empty());
+
+        Some(())
+    }
+
+    #[cfg(test)]
+    async fn broadcast(&mut self, value: V) -> Option<()>
+    where
+        V: Clone,
+    {
+        let mut fut = vec![];
+        for subscribers in self.subscriptions.values() {
+            for subscriber_handle in subscribers {
+                if let Some(mut sender) = self.subscribers.get(subscriber_handle).cloned() {
+                    let cloned_value = value.clone();
+                    fut.push(async move {
+                        sender
+                            .send(cloned_value)
+                            .await
+                            .is_err()
+                            .then_some(*subscriber_handle)
+                    });
+                }
             }
         }
         // clean closed sender

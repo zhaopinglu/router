@@ -87,8 +87,23 @@ impl Service<SubgraphRequest> for MockSubgraph {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: SubgraphRequest) -> Self::Future {
-        let response = if let Some(response) = self.mocks.get(req.subgraph_request.body()) {
+    fn call(&mut self, mut req: SubgraphRequest) -> Self::Future {
+        let body = req.subgraph_request.body_mut();
+        // Redact the callback url because it generates a subscription uuid
+        if let Some(callback_url) = body.extensions.get_mut("callback_url") {
+            let mut cb_url = url::Url::parse(
+                callback_url
+                    .as_str()
+                    .expect("callback_url extension must be a string"),
+            )
+            .expect("callback_url must be a valid URL");
+            cb_url.path_segments_mut().unwrap().pop();
+            cb_url.path_segments_mut().unwrap().push("subscription_id");
+
+            *callback_url = serde_json_bytes::Value::String(cb_url.to_string().into());
+        }
+
+        let response = if let Some(response) = self.mocks.get(body) {
             // Build an http Response
             let http_response = http::Response::builder()
                 .status(StatusCode::OK)
@@ -99,7 +114,7 @@ impl Service<SubgraphRequest> for MockSubgraph {
             let error = crate::error::Error::builder()
                 .message(format!(
                     "couldn't find mock for query {}",
-                    serde_json::to_string(&req.subgraph_request.body()).unwrap()
+                    serde_json::to_string(body).unwrap()
                 ))
                 .extension_code("FETCH_ERROR".to_string())
                 .extensions(self.extensions.clone().unwrap_or_default())
