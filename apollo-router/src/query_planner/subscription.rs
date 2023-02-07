@@ -107,7 +107,7 @@ impl SubscriptionNode {
                     };
 
                     tracing::trace!("Generated subscription ID: {}", subscription_handle.id);
-                    let _ = tokio::task::spawn(async move {
+                    let _subscription_task = tokio::task::spawn(async move {
                         let mut handle = match subscription_handle
                             .notify
                             .subscribe(subscription_handle.id)
@@ -219,6 +219,7 @@ impl SubscriptionNode {
             // Needs the original request here
             parameters.supergraph_request,
             parameters.schema,
+            &None, // TODO: check if it's something we should do also for subscriptions
         )
         .await
         {
@@ -244,8 +245,7 @@ impl SubscriptionNode {
                             .find_map(|(name, url)| (name == service_name).then_some(url))
                             .unwrap_or_else(|| {
                                 panic!(
-                                    "schema uri for subgraph '{}' should already have been checked",
-                                    service_name
+                                    "schema uri for subgraph '{service_name}' should already have been checked"
                                 )
                             })
                             .clone(),

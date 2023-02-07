@@ -178,10 +178,10 @@ impl Service<router::Request> for CallbackService {
 
             let cb_body = hyper::body::to_bytes(body)
                 .await
-                .map_err(|e| format!("failed to get the request body: {}", e))
+                .map_err(|e| format!("failed to get the request body: {e}"))
                 .and_then(|bytes| {
                     serde_json::from_reader::<_, CallbackPayload>(bytes.reader()).map_err(|err| {
-                        format!("failed to deserialize the request body into JSON: {}", err)
+                        format!("failed to deserialize the request body into JSON: {err}")
                     })
                 });
             let cb_body = match cb_body {
