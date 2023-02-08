@@ -73,6 +73,7 @@ mod state_machine;
 mod test_harness;
 pub mod tracer;
 mod uplink;
+pub(crate) mod protocols;
 
 pub use crate::configuration::Configuration;
 pub use crate::configuration::ListenAddr;

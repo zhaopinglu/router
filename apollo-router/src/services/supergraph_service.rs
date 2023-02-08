@@ -190,7 +190,6 @@ where
             let is_deferred = plan.is_deferred(operation_name.as_deref(), &variables);
             let is_subscription = plan.is_subscription(operation_name.as_deref());
 
-            // TODO change the accept multipart because for now it's the multipart defer spec
             let accepts_multipart_defer: bool = context
                 .get(ACCEPTS_MULTIPART_DEFER_CONTEXT_KEY)
                 .unwrap_or_default()
