@@ -318,6 +318,7 @@ mod tests {
 
     use super::*;
 
+    #[ignore]
     #[tokio::test]
     async fn test_ws_connection() {
         let url = url::Url::parse("ws://localhost:4041/ws").unwrap();
