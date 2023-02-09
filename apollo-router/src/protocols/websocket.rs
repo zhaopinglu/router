@@ -1,13 +1,17 @@
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::Poll;
 
+use futures::channel::mpsc;
 use futures::future;
 use futures::Future;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
+use http::HeaderValue;
 use pin_project_lite::pin_project;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncRead;
@@ -19,6 +23,27 @@ use uuid::Uuid;
 use crate::graphql;
 
 // TODO use graphql::Error everywhere ?!
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema, Copy)]
+pub(crate) enum WebSocketProtocol {
+    GraphQLWs,
+    SubscriptionsTransportWS,
+}
+
+impl Default for WebSocketProtocol {
+    fn default() -> Self {
+        Self::GraphQLWs
+    }
+}
+
+impl From<WebSocketProtocol> for HeaderValue {
+    fn from(value: WebSocketProtocol) -> Self {
+        match value {
+            WebSocketProtocol::GraphQLWs => HeaderValue::from_static("graphql-transport-ws"),
+            WebSocketProtocol::SubscriptionsTransportWS => HeaderValue::from_static("graphql-ws"),
+        }
+    }
+}
 
 /// A websocket message received from the client
 #[derive(Serialize, Debug)]
@@ -115,6 +140,7 @@ impl ServerMessage {
     }
 }
 
+// TODO implement multiplex it (only works with graphql-ws)
 pin_project! {
 pub(crate) struct GraphqlWebSocket<S> {
     #[pin]
@@ -305,16 +331,122 @@ struct WithId {
     id: String,
 }
 
+struct Tete {
+    lol: Box<dyn Sink<String, Error = graphql::Error>>,
+}
+
+pin_project! {
+struct Flux<T> {
+    #[pin]
+    tx: mpsc::Sender<T>,
+    #[pin]
+    rx: mpsc::Receiver<T>
+}
+}
+
+impl<T> Flux<T> {
+    pub(crate) fn new() -> Self {
+        let (tx, rx) = mpsc::channel(1000);
+        Self { tx, rx }
+    }
+}
+
+impl<T> Stream for Flux<T> {
+    type Item = T;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+
+        Pin::new(&mut this.rx).poll_next(cx)
+    }
+}
+
+impl<T> Sink<T> for Flux<T> {
+    type Error = mpsc::SendError;
+
+    fn poll_ready(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
+        let mut this = self.project();
+        Pin::new(&mut this.tx).poll_ready(cx)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+        let mut this = self.project();
+        Pin::new(&mut this.tx).start_send(item)
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
+        let mut this = self.project();
+        Pin::new(&mut this.tx).poll_flush(cx)
+    }
+
+    fn poll_close(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
+        let mut this = self.project();
+        Pin::new(&mut this.tx).poll_close(cx)
+    }
+}
+
+// pin_project! {
+// struct Merged<O, S, T>
+// {
+//     #[pin]
+//     original: O,
+//     #[pin]
+//     follower: S,
+//     data_to_follow: Option<T>,
+//     ready_to_follow: Option<T>,
+//     _phantom: PhantomData<T>
+// }
+// }
+
+// impl<O, S, T> Stream for Merged<O, S, T>
+// where
+//     O: Stream<Item = T> + Sink<T> + Unpin,
+//     S: Stream<Item = T> + Sink<T> + Unpin,
+// {
+//     type Item = T;
+
+//     fn poll_next(
+//         self: Pin<&mut Self>,
+//         cx: &mut std::task::Context<'_>,
+//     ) -> Poll<Option<Self::Item>> {
+//         let mut this = self.as_mut().project();
+
+//         match Pin::new(&mut this.original).poll_next(cx) {
+//             Poll::Ready(Some(value)) => {
+//                 match Pin::new(&mut this.follower).poll_ready(cx) {
+//                     Poll::Ready(_) => {
+//                         Pin::new(&mut this.follower).start_send(value, cx)
+//                     },
+//                     Poll::Pending => {
+
+//                     },
+//                 }
+//             },
+//             Poll::Ready(None) => Poll::Ready(None), //Not sure
+//             Poll::Pending => Poll::Pending,
+//         }
+//     }
+// }
+
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use futures::future;
     use futures::StreamExt;
     use http::HeaderValue;
+    use tokio_tungstenite::client_async;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
 
@@ -330,7 +462,7 @@ mod tests {
             // Old one
             // HeaderValue::from_static("graphql-ws"),
         );
-        let (ws_stream, resp) = connect_async(request).await.unwrap();
+        let (ws_stream, _resp) = connect_async(request).await.unwrap();
 
         let sub_uuid = Uuid::new_v4();
         let gql_stream =
@@ -344,7 +476,7 @@ mod tests {
           }
         }"#;
         let (mut gql_sink, mut gql_read_stream) = gql_stream.split();
-        let handle = tokio::task::spawn(async move {
+        let _handle = tokio::task::spawn(async move {
             gql_sink
                 .send(graphql::Request::builder().query(sub).build())
                 .await

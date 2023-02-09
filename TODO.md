@@ -9,6 +9,9 @@
 + Add support for websocket comm ?
 + Create a protocol abstraction to automatically handle all the protocol stuffs (server and client side)(including multipart, websocket, callback)
 
+
++ Put all the subscription logic into subgraph_service
+
 ```
 enum GraphQLProtocol {
     Callback,

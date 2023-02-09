@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::task::Context;
 use std::task::Poll;
@@ -20,6 +21,7 @@ use crate::graphql::Response;
 use crate::notification::Notify;
 use crate::plugin::Plugin;
 use crate::plugin::PluginInit;
+use crate::protocols::websocket::WebSocketProtocol;
 use crate::register_plugin;
 use crate::services::router;
 use crate::services::supergraph;
@@ -45,7 +47,7 @@ struct SubscriptionConfig {
     mode: SubscriptionMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SubscriptionMode {
     /// Using a callback url
@@ -53,7 +55,7 @@ pub(crate) enum SubscriptionMode {
     Callback(CallbackMode),
     /// Using websocket to directly connect to subgraph
     #[serde(rename = "passthrough")]
-    Passthrough,
+    Passthrough(PassthroughMode),
 }
 
 /// Using a callback url
@@ -72,11 +74,26 @@ pub(crate) struct CallbackMode {
     path: Option<String>,
 }
 
+/// Using websocket to directly connect to subgraph
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(default)]
+pub(crate) struct PassthroughMode {
+    /// URL used to access this router instance
+    pub(crate) subgraphs: HashMap<String, WebSocketConfiguration>,
+}
+
 impl Default for SubscriptionMode {
     fn default() -> Self {
         // TODO change this default ?
-        Self::Passthrough
+        Self::Passthrough(PassthroughMode::default())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(default)]
+pub(crate) struct WebSocketConfiguration {
+    pub(crate) path: Option<String>,
+    pub(crate) protocol: WebSocketProtocol,
 }
 
 fn default_path() -> String {
