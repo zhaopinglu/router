@@ -6,6 +6,7 @@ use std::task::Poll;
 
 use bytes::Buf;
 use futures::future::BoxFuture;
+use http::Method;
 use http::StatusCode;
 use multimap::MultiMap;
 use schemars::JsonSchema;
@@ -176,6 +177,18 @@ pub(crate) enum CallbackPayload {
     Subscription { data: Response },
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename = "lowercase")]
+pub(crate) enum CallbackKind {
+    #[serde(rename = "subscription")]
+    Subscription,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct DeleteCallbackPayload {
+    kind: CallbackKind,
+}
+
 #[derive(Clone)]
 pub(crate) struct CallbackService {
     notify: Notify<Uuid, graphql::Response>,
@@ -214,53 +227,106 @@ impl Service<router::Request> for CallbackService {
                     }
                 };
 
-            let cb_body = hyper::body::to_bytes(body)
-                .await
-                .map_err(|e| format!("failed to get the request body: {e}"))
-                .and_then(|bytes| {
-                    serde_json::from_reader::<_, CallbackPayload>(bytes.reader()).map_err(|err| {
-                        format!("failed to deserialize the request body into JSON: {err}")
-                    })
-                });
-            let cb_body = match cb_body {
-                Ok(cb_body) => cb_body,
-                Err(err) => {
-                    return Ok(router::Response {
-                        response: http::Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .body(err.into())
-                            .map_err(BoxError::from)?,
-                        context: req.context,
-                    });
-                }
-            };
-
-            match cb_body {
-                CallbackPayload::Subscription { data } => {
-                    let mut handle = match notify.subscribe_if_exist(sub_id).await {
-                        Some(handle) => handle,
-                        None => {
+            match parts.method {
+                Method::POST => {
+                    let cb_body = hyper::body::to_bytes(body)
+                        .await
+                        .map_err(|e| format!("failed to get the request body: {e}"))
+                        .and_then(|bytes| {
+                            serde_json::from_reader::<_, CallbackPayload>(bytes.reader()).map_err(
+                                |err| {
+                                    format!(
+                                        "failed to deserialize the request body into JSON: {err}"
+                                    )
+                                },
+                            )
+                        });
+                    let cb_body = match cb_body {
+                        Ok(cb_body) => cb_body,
+                        Err(err) => {
                             return Ok(router::Response {
                                 response: http::Response::builder()
-                                    .status(StatusCode::NOT_FOUND)
-                                    .body("suscription doesn't exist".into())
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(err.into())
                                     .map_err(BoxError::from)?,
                                 context: req.context,
                             });
                         }
                     };
 
-                    handle.publish(sub_id, data).await?;
-                }
-            }
+                    match cb_body {
+                        CallbackPayload::Subscription { data } => {
+                            let mut handle = match notify.subscribe_if_exist(sub_id).await {
+                                Some(handle) => handle,
+                                None => {
+                                    return Ok(router::Response {
+                                        response: http::Response::builder()
+                                            .status(StatusCode::NOT_FOUND)
+                                            .body("suscription doesn't exist".into())
+                                            .map_err(BoxError::from)?,
+                                        context: req.context,
+                                    });
+                                }
+                            };
 
-            Ok(router::Response {
-                response: http::Response::builder()
-                    .status(StatusCode::OK)
-                    .body::<hyper::Body>("ok".into())
-                    .map_err(BoxError::from)?,
-                context: req.context,
-            })
+                            handle.publish(sub_id, data).await?;
+                        }
+                    }
+
+                    Ok(router::Response {
+                        response: http::Response::builder()
+                            .status(StatusCode::OK)
+                            .body::<hyper::Body>("".into())
+                            .map_err(BoxError::from)?,
+                        context: req.context,
+                    })
+                }
+                Method::DELETE => {
+                    let cb_body = hyper::body::to_bytes(body)
+                        .await
+                        .map_err(|e| format!("failed to get the request body: {e}"))
+                        .and_then(|bytes| {
+                            serde_json::from_reader::<_, DeleteCallbackPayload>(bytes.reader())
+                                .map_err(|err| {
+                                    format!(
+                                        "failed to deserialize the request body into JSON: {err}"
+                                    )
+                                })
+                        });
+                    let cb_body = match cb_body {
+                        Ok(cb_body) => cb_body,
+                        Err(err) => {
+                            return Ok(router::Response {
+                                response: http::Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(err.into())
+                                    .map_err(BoxError::from)?,
+                                context: req.context,
+                            });
+                        }
+                    };
+
+                    match cb_body.kind {
+                        CallbackKind::Subscription => {
+                            notify.try_delete(sub_id);
+                            Ok(router::Response {
+                                response: http::Response::builder()
+                                    .status(StatusCode::ACCEPTED)
+                                    .body::<hyper::Body>("".into())
+                                    .map_err(BoxError::from)?,
+                                context: req.context,
+                            })
+                        }
+                    }
+                }
+                _ => Ok(router::Response {
+                    response: http::Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body::<hyper::Body>("".into())
+                        .map_err(BoxError::from)?,
+                    context: req.context,
+                }),
+            }
         })
     }
 }

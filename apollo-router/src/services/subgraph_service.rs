@@ -184,7 +184,8 @@ impl tower::Service<SubgraphRequest> for SubgraphService {
         let arc_apq_enabled = self.apq.clone();
 
         let make_calls = async move {
-            if let OperationKind::Subscription = request.operation_kind {
+            if request.operation_kind == OperationKind::Subscription && request.ws_stream.is_some()
+            {
                 // call_websocket
                 return call_websocket(request, context, service_name).await;
             }
@@ -283,7 +284,6 @@ async fn call_websocket(
     let SubgraphRequest {
         subgraph_request, ..
     } = request;
-    dbg!(&subgraph_request);
     let mut ws_stream_tx = request
         .ws_stream
         .ok_or_else(|| FetchError::SubrequestWsError {
@@ -293,7 +293,6 @@ async fn call_websocket(
     let (parts, body) = subgraph_request.into_parts();
 
     let request = get_websocket_request(service_name.clone(), parts, subgraph_cfg)?;
-    dbg!(&request);
     let (ws_stream, resp) =
         connect_async(request)
             .await
@@ -319,7 +318,6 @@ async fn call_websocket(
             reason: format!("cannot send the subgraph request to websocket stream: {err:?}"),
         })?;
 
-    println!("send the stream");
     ws_stream_tx.send(Box::new(gql_stream)).await?;
 
     Ok(SubgraphResponse::new_from_response(
