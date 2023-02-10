@@ -14,10 +14,7 @@ use crate::plugin::Plugin;
 use crate::plugin::PluginInit;
 use crate::register_plugin;
 use crate::services::subgraph;
-use crate::services::supergraph;
 use crate::services::SubgraphRequest;
-
-pub(crate) const OVERRIDE_URL_CONFIG_CONTEXT_KEY: &str = "override_url::config";
 
 #[derive(Debug, Clone)]
 struct OverrideSubgraphUrl {
@@ -45,23 +42,6 @@ impl Plugin for OverrideSubgraphUrl {
                 .map(|(k, v)| (k, Uri::from_str(v.as_str()).unwrap()))
                 .collect(),
         })
-    }
-
-    fn supergraph_service(&self, service: supergraph::BoxService) -> supergraph::BoxService {
-        // TODO best way to do this ?
-        let config: HashMap<String, String> = self
-            .urls
-            .iter()
-            .map(|(k, v)| (k.clone(), v.to_string()))
-            .collect();
-        service
-            .map_request(move |req: supergraph::Request| {
-                let _ = req
-                    .context
-                    .insert(OVERRIDE_URL_CONFIG_CONTEXT_KEY, config.clone());
-                req
-            })
-            .boxed()
     }
 
     fn subgraph_service(

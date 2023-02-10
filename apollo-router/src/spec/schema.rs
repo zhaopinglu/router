@@ -756,7 +756,7 @@ impl Schema {
     }
 
     /// Return the subgraph URI given the service name
-    pub(crate) fn subgraph(&self, service_name: &str) -> Option<&Uri> {
+    pub(crate) fn subgraph_url(&self, service_name: &str) -> Option<&Uri> {
         self.subgraphs.get(service_name)
     }
 

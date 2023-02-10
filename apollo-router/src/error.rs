@@ -72,6 +72,16 @@ pub(crate) enum FetchError {
         /// The reason the fetch failed.
         reason: String,
     },
+    /// Websocket fetch failed from '{service}': {reason}
+    ///
+    /// note that this relates to a transport error and not a GraphQL error
+    SubrequestWsError {
+        /// The service failed.
+        service: String,
+
+        /// The reason the fetch failed.
+        reason: String,
+    },
 
     /// subquery requires field '{field}' but it was not found in the current response
     ExecutionFieldNotFound {
@@ -107,6 +117,7 @@ impl FetchError {
                 FetchError::SubrequestMalformedResponse { service, .. }
                 | FetchError::SubrequestUnexpectedPatchResponse { service }
                 | FetchError::SubrequestHttpError { service, .. }
+                | FetchError::SubrequestWsError { service, .. }
                 | FetchError::CompressionError { service, .. } => {
                     extensions
                         .entry("service")
@@ -153,6 +164,7 @@ impl ErrorExtension for FetchError {
                 "SUBREQUEST_UNEXPECTED_PATCH_RESPONSE"
             }
             FetchError::SubrequestHttpError { .. } => "SUBREQUEST_HTTP_ERROR",
+            FetchError::SubrequestWsError { .. } => "SUBREQUEST_WEBSOCKET_ERROR",
             FetchError::ExecutionFieldNotFound { .. } => "EXECUTION_FIELD_NOT_FOUND",
             FetchError::ExecutionPathNotFound { .. } => "EXECUTION_PATH_NOT_FOUND",
             FetchError::CompressionError { .. } => "COMPRESSION_ERROR",

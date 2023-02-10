@@ -1,8 +1,6 @@
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::Poll;
 
-use futures::channel::mpsc;
 use futures::future;
 use futures::Future;
 use futures::Sink;
@@ -331,120 +329,10 @@ struct WithId {
     id: String,
 }
 
-struct Tete {
-    lol: Box<dyn Sink<String, Error = graphql::Error>>,
-}
-
-pin_project! {
-struct Flux<T> {
-    #[pin]
-    tx: mpsc::Sender<T>,
-    #[pin]
-    rx: mpsc::Receiver<T>
-}
-}
-
-impl<T> Flux<T> {
-    pub(crate) fn new() -> Self {
-        let (tx, rx) = mpsc::channel(1000);
-        Self { tx, rx }
-    }
-}
-
-impl<T> Stream for Flux<T> {
-    type Item = T;
-
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
-
-        Pin::new(&mut this.rx).poll_next(cx)
-    }
-}
-
-impl<T> Sink<T> for Flux<T> {
-    type Error = mpsc::SendError;
-
-    fn poll_ready(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), Self::Error>> {
-        let mut this = self.project();
-        Pin::new(&mut this.tx).poll_ready(cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
-        let mut this = self.project();
-        Pin::new(&mut this.tx).start_send(item)
-    }
-
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), Self::Error>> {
-        let mut this = self.project();
-        Pin::new(&mut this.tx).poll_flush(cx)
-    }
-
-    fn poll_close(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), Self::Error>> {
-        let mut this = self.project();
-        Pin::new(&mut this.tx).poll_close(cx)
-    }
-}
-
-// pin_project! {
-// struct Merged<O, S, T>
-// {
-//     #[pin]
-//     original: O,
-//     #[pin]
-//     follower: S,
-//     data_to_follow: Option<T>,
-//     ready_to_follow: Option<T>,
-//     _phantom: PhantomData<T>
-// }
-// }
-
-// impl<O, S, T> Stream for Merged<O, S, T>
-// where
-//     O: Stream<Item = T> + Sink<T> + Unpin,
-//     S: Stream<Item = T> + Sink<T> + Unpin,
-// {
-//     type Item = T;
-
-//     fn poll_next(
-//         self: Pin<&mut Self>,
-//         cx: &mut std::task::Context<'_>,
-//     ) -> Poll<Option<Self::Item>> {
-//         let mut this = self.as_mut().project();
-
-//         match Pin::new(&mut this.original).poll_next(cx) {
-//             Poll::Ready(Some(value)) => {
-//                 match Pin::new(&mut this.follower).poll_ready(cx) {
-//                     Poll::Ready(_) => {
-//                         Pin::new(&mut this.follower).start_send(value, cx)
-//                     },
-//                     Poll::Pending => {
-
-//                     },
-//                 }
-//             },
-//             Poll::Ready(None) => Poll::Ready(None), //Not sure
-//             Poll::Pending => Poll::Pending,
-//         }
-//     }
-// }
-
 #[cfg(test)]
 mod tests {
     use futures::StreamExt;
     use http::HeaderValue;
-    use tokio_tungstenite::client_async;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 

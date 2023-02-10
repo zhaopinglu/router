@@ -12,6 +12,7 @@ use async_compression::tokio::write::BrotliEncoder;
 use async_compression::tokio::write::GzipEncoder;
 use async_compression::tokio::write::ZlibEncoder;
 use futures::future::BoxFuture;
+use futures::SinkExt;
 use global::get_text_map_propagator;
 use http::header::ACCEPT;
 use http::header::ACCEPT_ENCODING;
@@ -29,6 +30,8 @@ use opentelemetry::global;
 use rustls::RootCertStore;
 use schemars::JsonSchema;
 use tokio::io::AsyncWriteExt;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tower::util::BoxService;
 use tower::BoxError;
 use tower::Service;
@@ -38,13 +41,22 @@ use tower_http::decompression::Decompression;
 use tower_http::decompression::DecompressionLayer;
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use uuid::Uuid;
 
 use super::layers::content_negociation::GRAPHQL_JSON_RESPONSE_HEADER_VALUE;
 use super::Plugins;
 use crate::error::FetchError;
 use crate::graphql;
+use crate::plugins::subscription::PassthroughMode;
+use crate::plugins::subscription::SubscriptionMode;
+use crate::plugins::subscription::WebSocketConfiguration;
+use crate::plugins::subscription::SUBSCRIPTION_MODE_CONTEXT_KEY;
 use crate::plugins::telemetry::LOGGING_DISPLAY_BODY;
 use crate::plugins::telemetry::LOGGING_DISPLAY_HEADERS;
+use crate::protocols::websocket::convert_websocket_stream;
+use crate::protocols::websocket::GraphqlWebSocket;
+use crate::protocols::websocket::WebSocketProtocol;
+use crate::query_planner::OperationKind;
 use crate::services::layers::apq;
 use crate::services::SubgraphRequest;
 use crate::services::SubgraphResponse;
@@ -172,6 +184,11 @@ impl tower::Service<SubgraphRequest> for SubgraphService {
         let arc_apq_enabled = self.apq.clone();
 
         let make_calls = async move {
+            if let OperationKind::Subscription = request.operation_kind {
+                // call_websocket
+                return call_websocket(request, context, service_name).await;
+            }
+
             // If APQ is not enabled, simply make the graphql call
             // with the same request body.
             let apq_enabled = arc_apq_enabled.as_ref();
@@ -235,6 +252,80 @@ impl tower::Service<SubgraphRequest> for SubgraphService {
 
         Box::pin(make_calls)
     }
+}
+
+/// call websocket makes websocket calls with modified graphql::Request (body)
+async fn call_websocket(
+    request: SubgraphRequest,
+    context: Context,
+    service_name: String,
+) -> Result<SubgraphResponse, BoxError> {
+    let mode: SubscriptionMode = context
+        .get(SUBSCRIPTION_MODE_CONTEXT_KEY)
+        .ok()
+        .flatten()
+        .ok_or_else(|| FetchError::SubrequestWsError {
+            service: service_name.clone(),
+            reason: "subscription support is not enabled".to_string(),
+        })?;
+    let subgraph_cfg = match &mode {
+        SubscriptionMode::Callback(_) => {
+            return Err(Box::new(FetchError::SubrequestWsError {
+                service: service_name.clone(),
+                reason: "subscription mode passthrough is not enabled".to_string(),
+            }));
+        }
+        SubscriptionMode::Passthrough(PassthroughMode { subgraphs }) => {
+            subgraphs.get(&service_name)
+        }
+    };
+
+    let SubgraphRequest {
+        subgraph_request, ..
+    } = request;
+    dbg!(&subgraph_request);
+    let mut ws_stream_tx = request
+        .ws_stream
+        .ok_or_else(|| FetchError::SubrequestWsError {
+            service: service_name.clone(),
+            reason: "cannot get the websocket stream".to_string(),
+        })?;
+    let (parts, body) = subgraph_request.into_parts();
+
+    let request = get_websocket_request(service_name.clone(), parts, subgraph_cfg)?;
+    dbg!(&request);
+    let (ws_stream, resp) =
+        connect_async(request)
+            .await
+            .map_err(|err| FetchError::SubrequestWsError {
+                service: service_name.clone(),
+                reason: format!("cannot connect websocket to subgraph: {err}"),
+            })?;
+
+    let sub_uuid = Uuid::new_v4();
+    let mut gql_stream =
+        GraphqlWebSocket::new(convert_websocket_stream(ws_stream, sub_uuid), sub_uuid)
+            .await
+            .map_err(|_| FetchError::SubrequestWsError {
+                service: service_name.clone(),
+                reason: "cannot get the GraphQL websocket stream".to_string(),
+            })?;
+
+    gql_stream
+        .send(body)
+        .await
+        .map_err(|err| FetchError::SubrequestWsError {
+            service: service_name,
+            reason: format!("cannot send the subgraph request to websocket stream: {err:?}"),
+        })?;
+
+    println!("send the stream");
+    ws_stream_tx.send(Box::new(gql_stream)).await?;
+
+    Ok(SubgraphResponse::new_from_response(
+        resp.map(|_| graphql::Response::default()),
+        context,
+    ))
 }
 
 /// call_http makes http calls with modified graphql::Request (body)
@@ -407,6 +498,78 @@ async fn call_http(
     let resp = http::Response::from_parts(parts, graphql);
 
     Ok(SubgraphResponse::new_from_response(resp, context))
+}
+
+fn get_websocket_request(
+    service_name: String,
+    mut parts: http::request::Parts,
+    subgraph_ws_cfg: Option<&WebSocketConfiguration>,
+) -> Result<http::Request<()>, FetchError> {
+    let mut subgraph_url = url::Url::parse(&parts.uri.to_string()).map_err(|err| {
+        tracing::error!("cannot parse subgraph url {}: {err:?}", parts.uri);
+        FetchError::SubrequestWsError {
+            service: service_name.clone(),
+            reason: "cannot parse subgraph url".to_string(),
+        }
+    })?;
+    let new_scheme = match subgraph_url.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        _ => "ws",
+    };
+    subgraph_url.set_scheme(new_scheme).map_err(|err| {
+        tracing::error!("cannot set a scheme '{new_scheme}' on subgraph url: {err:?}");
+
+        FetchError::SubrequestWsError {
+            service: service_name.clone(),
+            reason: "cannot set a scheme on websocket url".to_string(),
+        }
+    })?;
+
+    if let Some(WebSocketConfiguration { path, protocol }) = subgraph_ws_cfg {
+        let subgraph_url = match path {
+            Some(path) => subgraph_url
+                .join(path)
+                .map_err(|_| FetchError::SubrequestWsError {
+                    service: service_name.clone(),
+                    reason: "cannot parse subgraph url with the specific websocket path"
+                        .to_string(),
+                })?,
+            None => subgraph_url,
+        };
+        let mut request = subgraph_url.into_client_request().map_err(|err| {
+            tracing::error!("cannot create websocket client request: {err:?}");
+
+            FetchError::SubrequestWsError {
+                service: service_name.clone(),
+                reason: "cannot create websocket client request".to_string(),
+            }
+        })?;
+        request
+            .headers_mut()
+            .insert(http::header::SEC_WEBSOCKET_PROTOCOL, (*protocol).into());
+        parts.headers.extend(request.headers_mut().drain());
+        *request.headers_mut() = parts.headers;
+
+        Ok(request)
+    } else {
+        let mut request = subgraph_url.into_client_request().map_err(|err| {
+            tracing::error!("cannot create websocket client request: {err:?}");
+
+            FetchError::SubrequestWsError {
+                service: service_name.clone(),
+                reason: "cannot create websocket client request".to_string(),
+            }
+        })?;
+        request.headers_mut().insert(
+            http::header::SEC_WEBSOCKET_PROTOCOL,
+            WebSocketProtocol::default().into(),
+        );
+        parts.headers.extend(request.headers_mut().drain());
+        *request.headers_mut() = parts.headers;
+
+        Ok(request)
+    }
 }
 
 fn get_apq_error(gql_response: &graphql::Response) -> APQError {
@@ -990,6 +1153,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap();
@@ -1024,6 +1188,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap_err();
@@ -1058,6 +1223,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap();
@@ -1094,6 +1260,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap_err();
@@ -1130,6 +1297,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap();
@@ -1172,6 +1340,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap();
@@ -1210,6 +1379,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap();
@@ -1249,6 +1419,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap();
@@ -1286,6 +1457,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap();
@@ -1323,6 +1495,7 @@ mod tests {
                     .expect("expecting valid request"),
                 operation_kind: OperationKind::Query,
                 context: Context::new(),
+                ws_stream: None,
             })
             .await
             .unwrap();

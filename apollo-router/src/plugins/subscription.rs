@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::str::FromStr;
 use std::task::Context;
 use std::task::Poll;
@@ -18,12 +19,16 @@ use uuid::Uuid;
 
 use crate::graphql;
 use crate::graphql::Response;
+use crate::json_ext::Object;
+use crate::layers::ServiceBuilderExt;
 use crate::notification::Notify;
 use crate::plugin::Plugin;
 use crate::plugin::PluginInit;
 use crate::protocols::websocket::WebSocketProtocol;
+use crate::query_planner::OperationKind;
 use crate::register_plugin;
 use crate::services::router;
+use crate::services::subgraph;
 use crate::services::supergraph;
 use crate::Endpoint;
 use crate::ListenAddr;
@@ -123,10 +128,26 @@ impl Plugin for Subscription {
                 req.context
                     .insert(SUBSCRIPTION_MODE_CONTEXT_KEY, mode.clone())
                     .unwrap();
-
                 req
             })
             .service(service)
+            .boxed()
+    }
+
+    fn subgraph_service(
+        &self,
+        _subgraph_name: &str,
+        service: subgraph::BoxService,
+    ) -> subgraph::BoxService {
+        let enabled = self.enabled;
+        ServiceBuilder::new()
+            .checkpoint(move |req: subgraph::Request| {
+                if req.operation_kind == OperationKind::Subscription && !enabled {
+                    Ok(ControlFlow::Break(subgraph::Response::builder().context(req.context).error(graphql::Error::builder().message("cannot execute a subscription if it's not enabled in the configuration").extension_code("SUBSCRIPTION_DISABLED").build()).extensions(Object::default()).build()))
+                } else {
+                    Ok(ControlFlow::Continue(req))
+                }
+            }).service(service)
             .boxed()
     }
 

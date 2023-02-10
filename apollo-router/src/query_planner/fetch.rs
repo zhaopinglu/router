@@ -220,8 +220,7 @@ impl FetchNode {
                     .uri(
                         parameters
                             .schema
-                            .subgraphs()
-                            .find_map(|(name, url)| (name == service_name).then_some(url))
+                            .subgraph_url(service_name)
                             .unwrap_or_else(|| {
                                 panic!(
                                     "schema uri for subgraph '{service_name}' should already have been checked"

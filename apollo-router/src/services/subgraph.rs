@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use futures::channel::mpsc;
+use futures::Stream;
 use http::StatusCode;
 use serde_json_bytes::ByteString;
 use serde_json_bytes::Map as JsonMap;
@@ -31,6 +33,10 @@ pub struct Request {
     pub operation_kind: OperationKind,
 
     pub context: Context,
+
+    // TODO find better name
+    pub(crate) ws_stream:
+        Option<mpsc::Sender<Box<dyn Stream<Item = graphql::Response> + Send + Unpin>>>,
 }
 
 #[buildstructor::buildstructor]
@@ -44,12 +50,14 @@ impl Request {
         subgraph_request: http::Request<graphql::Request>,
         operation_kind: OperationKind,
         context: Context,
+        ws_stream: Option<mpsc::Sender<Box<dyn Stream<Item = graphql::Response> + Send + Unpin>>>,
     ) -> Request {
         Self {
             supergraph_request,
             subgraph_request,
             operation_kind,
             context,
+            ws_stream,
         }
     }
 
@@ -64,12 +72,14 @@ impl Request {
         subgraph_request: Option<http::Request<graphql::Request>>,
         operation_kind: Option<OperationKind>,
         context: Option<Context>,
+        ws_stream: Option<mpsc::Sender<Box<dyn Stream<Item = graphql::Response> + Send + Unpin>>>,
     ) -> Request {
         Request::new(
             supergraph_request.unwrap_or_default(),
             subgraph_request.unwrap_or_default(),
             operation_kind.unwrap_or(OperationKind::Query),
             context.unwrap_or_default(),
+            ws_stream,
         )
     }
 }
@@ -99,6 +109,7 @@ impl Clone for Request {
             subgraph_request,
             operation_kind: self.operation_kind,
             context: self.context.clone(),
+            ws_stream: self.ws_stream.clone(),
         }
     }
 }
