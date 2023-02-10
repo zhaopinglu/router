@@ -796,7 +796,11 @@ expression: "&schema"
         },
         "mode": {
           "description": "Select a subscription mode (callback or passthrough)",
-          "default": "passthrough",
+          "default": {
+            "passthrough": {
+              "subgraphs": {}
+            }
+          },
           "oneOf": [
             {
               "description": "Using a callback url",
@@ -844,10 +848,45 @@ expression: "&schema"
             },
             {
               "description": "Using websocket to directly connect to subgraph",
-              "type": "string",
-              "enum": [
+              "type": "object",
+              "required": [
                 "passthrough"
-              ]
+              ],
+              "properties": {
+                "passthrough": {
+                  "description": "Using websocket to directly connect to subgraph",
+                  "type": "object",
+                  "properties": {
+                    "subgraphs": {
+                      "description": "WebSocket configuration for specific subgraphs",
+                      "default": {},
+                      "type": "object",
+                      "additionalProperties": {
+                        "description": "WebSocket configuration for a specific subgraph",
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "description": "Path on which WebSockets are listening",
+                            "default": null,
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "protocol": {
+                            "description": "Which WebSocket GraphQL protocol to use for this subgraph possible values are: 'graphql_ws' | 'subscriptions_transport_ws' (default: graphql_ws)",
+                            "default": "graphql_ws",
+                            "type": "string",
+                            "enum": [
+                              "graphql_ws",
+                              "subscriptions_transport_w_s"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "additionalProperties": false
             }
           ]
         }

@@ -34,7 +34,8 @@ pub struct Request {
 
     pub context: Context,
 
-    // TODO find better name
+    // TODO find better name ?
+    /// Channel to send the websocket stream to listen on events coming from subgraph in a task
     pub(crate) ws_stream:
         Option<mpsc::Sender<Box<dyn Stream<Item = graphql::Response> + Send + Unpin>>>,
 }

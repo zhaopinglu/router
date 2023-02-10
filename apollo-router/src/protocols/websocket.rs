@@ -20,24 +20,23 @@ use uuid::Uuid;
 
 use crate::graphql;
 
-// TODO use graphql::Error everywhere ?!
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema, Copy)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum WebSocketProtocol {
-    GraphQLWs,
+    GraphqlWs,
     SubscriptionsTransportWS,
 }
 
 impl Default for WebSocketProtocol {
     fn default() -> Self {
-        Self::GraphQLWs
+        Self::GraphqlWs
     }
 }
 
 impl From<WebSocketProtocol> for HeaderValue {
     fn from(value: WebSocketProtocol) -> Self {
         match value {
-            WebSocketProtocol::GraphQLWs => HeaderValue::from_static("graphql-transport-ws"),
+            WebSocketProtocol::GraphqlWs => HeaderValue::from_static("graphql-transport-ws"),
             WebSocketProtocol::SubscriptionsTransportWS => HeaderValue::from_static("graphql-ws"),
         }
     }
@@ -138,7 +137,6 @@ impl ServerMessage {
     }
 }
 
-// TODO implement multiplex it (only works with graphql-ws)
 pin_project! {
 pub(crate) struct GraphqlWebSocket<S> {
     #[pin]
@@ -162,21 +160,34 @@ where
     }
 }
 
+#[derive(thiserror::Error, Debug)]
+pub(crate) enum Error {
+    #[error("websocket error")]
+    WebSocketError(#[from] tokio_tungstenite::tungstenite::Error),
+    #[error("deserialization/serialization error")]
+    SerdeError(#[from] serde_json::Error),
+}
+
 pub(crate) fn convert_websocket_stream<T>(
     stream: WebSocketStream<T>,
     id: Uuid,
-) -> impl Stream<Item = serde_json::Result<ServerMessage>>
-       + Sink<ClientMessage, Error = tokio_tungstenite::tungstenite::Error>
+) -> impl Stream<Item = serde_json::Result<ServerMessage>> + Sink<ClientMessage, Error = Error>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     stream
         .with(|client_message: ClientMessage| {
-            future::ready(Ok::<_, tokio_tungstenite::tungstenite::Error>(
-                Message::Text(serde_json::to_string(&client_message).unwrap()),
-            ))
+            future::ready(match serde_json::to_string(&client_message) {
+                Ok(client_message_str) => Ok(Message::Text(client_message_str)),
+                Err(err) => Err(Error::SerdeError(err)),
+            })
         })
-        .take_while(|res| future::ready(res.is_ok())) // TODO log error or something
+        .take_while(|res| {
+            if let Err(err) = res {
+                tracing::error!("cannot consume more message on websocket stream: {err:?}");
+            }
+            future::ready(res.is_ok())
+        })
         .map(Result::unwrap)
         .map(move |msg| match msg {
             Message::Text(text) => serde_json::from_str(&text),

@@ -16,7 +16,6 @@ pub(crate) type NotifyError = SendError;
 
 enum Notification<K, V> {
     Subscribe {
-        // TODO use uuid
         topic: K,
         handle: Uuid,
         // Sender to send value we will receive
@@ -176,7 +175,6 @@ impl<K, V> Handle<K, V> {
     }
 
     pub(crate) async fn publish(&mut self, topic: K, data: V) -> Result<(), NotifyError> {
-        // FIXME: handle errors
         self.sender
             .send(Notification::Publish { topic, data })
             .await?;

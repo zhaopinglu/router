@@ -84,7 +84,7 @@ pub(crate) struct CallbackMode {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default)]
 pub(crate) struct PassthroughMode {
-    /// URL used to access this router instance
+    /// WebSocket configuration for specific subgraphs
     pub(crate) subgraphs: HashMap<String, WebSocketConfiguration>,
 }
 
@@ -97,8 +97,11 @@ impl Default for SubscriptionMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default)]
+/// WebSocket configuration for a specific subgraph
 pub(crate) struct WebSocketConfiguration {
+    /// Path on which WebSockets are listening
     pub(crate) path: Option<String>,
+    /// Which WebSocket GraphQL protocol to use for this subgraph possible values are: 'graphql_ws' | 'subscriptions_transport_ws' (default: graphql_ws)
     pub(crate) protocol: WebSocketProtocol,
 }
 
