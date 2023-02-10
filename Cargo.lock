@@ -5974,7 +5974,7 @@ dependencies = [
  "http",
  "httparse",
  "log",
- "rand",
+ "rand 0.8.5",
  "sha1 0.10.5",
  "thiserror",
  "url",
