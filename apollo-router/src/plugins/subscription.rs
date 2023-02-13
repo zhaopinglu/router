@@ -173,23 +173,19 @@ impl Plugin for Subscription {
     }
 }
 
+// TODO change the payload to write action inside like subscribe_subscription or delete_subscription to not depend only on HTTP method
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "kind", rename = "lowercase")]
 pub(crate) enum CallbackPayload {
     #[serde(rename = "subscription")]
-    Subscription { data: Response },
+    Subscription { payload: Response, id: Uuid },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(rename = "lowercase")]
-pub(crate) enum CallbackKind {
+#[serde(tag = "kind", rename = "lowercase")]
+pub(crate) enum DeleteCallbackPayload {
     #[serde(rename = "subscription")]
-    Subscription,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub(crate) struct DeleteCallbackPayload {
-    kind: CallbackKind,
+    Subscription { id: Uuid },
 }
 
 #[derive(Clone)]
@@ -258,7 +254,7 @@ impl Service<router::Request> for CallbackService {
                     };
 
                     match cb_body {
-                        CallbackPayload::Subscription { data } => {
+                        CallbackPayload::Subscription { payload: data, .. } => {
                             let mut handle = match notify.subscribe_if_exist(sub_id).await {
                                 Some(handle) => handle,
                                 None => {
@@ -309,8 +305,8 @@ impl Service<router::Request> for CallbackService {
                         }
                     };
 
-                    match cb_body.kind {
-                        CallbackKind::Subscription => {
+                    match cb_body {
+                        DeleteCallbackPayload::Subscription { .. } => {
                             notify.try_delete(sub_id);
                             Ok(router::Response {
                                 response: http::Response::builder()

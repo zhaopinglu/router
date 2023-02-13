@@ -2,16 +2,12 @@
 + Handle errors correctly
 + Fix tests
 + Write new test
-+ Implement passthrough mode
-    - Which ws protocol ?
-    - Maybe detect the right protocol ?
-+ Implement subscription callback with apollo server
++ Should we detect the right protocol for websocket ? Like trying with graphql-ws header and then with the other one to really reject the connection
 + Add auth on subscription callback
-+ Add support for websocket comm ?
+
+
+BONUS
 + Create a protocol abstraction to automatically handle all the protocol stuffs (server and client side)(including multipart, websocket, callback)
-
-
-+ Put all the subscription logic into subgraph_service
 
 ```
 enum GraphQLProtocol {

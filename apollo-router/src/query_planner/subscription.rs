@@ -214,7 +214,13 @@ impl SubscriptionNode {
                     let fetch_time_offset =
                         parameters.context.created_at.elapsed().as_nanos() as i64;
                     match self
-                        .subscribe_callback(parameters, current_dir, parent_value, callback_url)
+                        .subscribe_callback(
+                            parameters,
+                            current_dir,
+                            parent_value,
+                            subscription_id,
+                            callback_url,
+                        )
                         .instrument(tracing::info_span!(
                             SUBSCRIBE_SPAN_NAME,
                             "otel.kind" = "INTERNAL",
@@ -282,6 +288,7 @@ impl SubscriptionNode {
         parameters: &'a ExecutionParameters<'a>,
         current_dir: &'a Path,
         data: &Value,
+        subscription_id: Uuid,
         callback_url: url::Url,
     ) -> Result<Vec<Error>, FetchError> {
         let SubscriptionNode {
@@ -312,6 +319,10 @@ impl SubscriptionNode {
         extensions.insert(
             "callback_url",
             Value::String(callback_url.to_string().into()),
+        );
+        extensions.insert(
+            "subscription_id",
+            Value::String(subscription_id.to_string().into()),
         );
         let subgraph_request = SubgraphRequest::builder()
             .supergraph_request(parameters.supergraph_request.clone())
