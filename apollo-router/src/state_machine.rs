@@ -144,14 +144,8 @@ impl<FA: RouterSuperServiceFactory> State<FA> {
                 ..
             } => {
                 if let Some(new_configuration) = &mut new_configuration {
-                    if let Err(e) = configuration.is_compatible(new_configuration) {
-                        tracing::info!("reload not possible; {}", e);
-                        return self;
-                    }
-                    // Keep the old notify pub sub
                     new_configuration.notify = configuration.notify.clone();
                 }
-
                 tracing::info!("reloading");
                 let mut guard = state_machine.listen_addresses.clone().write_owned().await;
                 new_state = match Self::try_start(
