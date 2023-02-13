@@ -31,6 +31,7 @@ use rustls::RootCertStore;
 use schemars::JsonSchema;
 use tokio::io::AsyncWriteExt;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::connect_async_tls_with_config;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tower::util::BoxService;
 use tower::BoxError;
@@ -293,13 +294,14 @@ async fn call_websocket(
     let (parts, body) = subgraph_request.into_parts();
 
     let request = get_websocket_request(service_name.clone(), parts, subgraph_cfg)?;
-    let (ws_stream, resp) =
-        connect_async(request)
-            .await
-            .map_err(|err| FetchError::SubrequestWsError {
-                service: service_name.clone(),
-                reason: format!("cannot connect websocket to subgraph: {err}"),
-            })?;
+    let (ws_stream, resp) = match request.uri().scheme_str() {
+        Some("wss") => connect_async_tls_with_config(request, None, None).await,
+        _ => connect_async(request).await,
+    }
+    .map_err(|err| FetchError::SubrequestWsError {
+        service: service_name.clone(),
+        reason: format!("cannot connect websocket to subgraph: {err}"),
+    })?;
 
     let sub_uuid = Uuid::new_v4();
     let mut gql_stream =
