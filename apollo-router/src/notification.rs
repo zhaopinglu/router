@@ -31,6 +31,10 @@ enum Notification<K, V> {
         topic: K,
         data: V,
     },
+    Exist {
+        topic: K,
+        response_sender: oneshot::Sender<bool>,
+    },
     SubscribeIfExist {
         topic: K,
         handle: Uuid,
@@ -103,6 +107,23 @@ where
         match response_rx.await {
             Ok(true) => Some(handle),
             _ => None,
+        }
+    }
+
+    // TODO improve error handling here
+    pub(crate) async fn exist(&mut self, topic: K) -> Result<bool, NotifyError> {
+        // Channel to check if the topic still exists or not
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(Notification::Exist {
+                topic,
+                response_sender: response_tx,
+            })
+            .await?;
+
+        match response_rx.await {
+            Ok(true) => Ok(true),
+            _ => Ok(false),
         }
     }
 
@@ -215,6 +236,12 @@ where
                     let _ = response_sender.send(false);
                 }
             }
+            Notification::Exist {
+                topic,
+                response_sender,
+            } => {
+                let _ = response_sender.send(pubsub.exist(&topic));
+            }
             #[cfg(test)]
             Notification::Broadcast { data } => {
                 pubsub.broadcast(data).await;
@@ -281,6 +308,11 @@ where
                     .is_empty()
             })
             .unwrap_or_default()
+    }
+
+    /// Check if the topic exists
+    fn exist(&self, topic: &K) -> bool {
+        self.subscriptions.contains_key(topic)
     }
 
     async fn delete(&mut self, topic: K) {

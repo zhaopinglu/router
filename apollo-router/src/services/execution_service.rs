@@ -130,7 +130,8 @@ impl Service<ExecutionRequest> for ExecutionService {
                 let stream_mode = if is_deferred {
                     StreamMode::Defer
                 } else {
-                    first.subscribed = Some(true);
+                    // Keep the connection opened only if there is no error when init the subscription
+                    first.subscribed = Some(first.errors.is_empty());
                     StreamMode::Subscription
                 };
                 let stream = filter_stream(first, receiver, stream_mode);

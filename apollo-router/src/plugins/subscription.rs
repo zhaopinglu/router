@@ -184,6 +184,8 @@ pub(crate) enum CallbackPayload {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "action", rename = "lowercase")]
 pub(crate) enum SubscriptionPayload {
+    #[serde(rename = "init")]
+    Init { id: Uuid },
     #[serde(rename = "next")]
     Next { payload: Response, id: Uuid },
     #[serde(rename = "complete")]
@@ -292,6 +294,28 @@ impl Service<router::Request> for CallbackService {
                                     .map_err(BoxError::from)?,
                                 context: req.context,
                             })
+                        }
+                        CallbackPayload::Subscription(SubscriptionPayload::Init { id }) => {
+                            if let Some(res) = assert_ids(&req.context, &sub_id, &id) {
+                                return Ok(res);
+                            }
+                            if notify.exist(id).await? {
+                                Ok(router::Response {
+                                    response: http::Response::builder()
+                                        .status(StatusCode::NO_CONTENT)
+                                        .body::<hyper::Body>("".into())
+                                        .map_err(BoxError::from)?,
+                                    context: req.context,
+                                })
+                            } else {
+                                Ok(router::Response {
+                                    response: http::Response::builder()
+                                        .status(StatusCode::NOT_FOUND)
+                                        .body("suscription doesn't exist".into())
+                                        .map_err(BoxError::from)?,
+                                    context: req.context,
+                                })
+                            }
                         }
                         CallbackPayload::Subscription(SubscriptionPayload::Complete { id }) => {
                             if let Some(res) = assert_ids(&req.context, &sub_id, &id) {
