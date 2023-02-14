@@ -189,14 +189,20 @@ pub(crate) enum SubscriptionPayload {
     #[serde(rename = "next")]
     Next { payload: Response, id: Uuid },
     #[serde(rename = "complete")]
-    Complete { id: Uuid },
+    Complete {
+        id: Uuid,
+        errors: Option<Vec<graphql::Error>>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "kind", rename = "lowercase")]
 pub(crate) enum DeleteCallbackPayload {
     #[serde(rename = "subscription")]
-    Subscription { id: Uuid },
+    Subscription {
+        id: Uuid,
+        errors: Option<Vec<graphql::Error>>,
+    },
 }
 
 #[derive(Clone)]
@@ -317,9 +323,20 @@ impl Service<router::Request> for CallbackService {
                                 })
                             }
                         }
-                        CallbackPayload::Subscription(SubscriptionPayload::Complete { id }) => {
+                        CallbackPayload::Subscription(SubscriptionPayload::Complete {
+                            id,
+                            errors,
+                        }) => {
                             if let Some(res) = assert_ids(&req.context, &sub_id, &id) {
                                 return Ok(res);
+                            }
+                            if let Some(errors) = errors {
+                                let _ = notify
+                                    .publish(
+                                        id,
+                                        graphql::Response::builder().errors(errors).build(),
+                                    )
+                                    .await;
                             }
                             notify.try_delete(id);
                             Ok(router::Response {
@@ -358,10 +375,20 @@ impl Service<router::Request> for CallbackService {
                     };
 
                     match cb_body {
-                        DeleteCallbackPayload::Subscription { id } => {
+                        DeleteCallbackPayload::Subscription { id, errors } => {
                             if let Some(res) = assert_ids(&req.context, &sub_id, &id) {
                                 return Ok(res);
                             }
+
+                            if let Some(errors) = errors {
+                                let _ = notify
+                                    .publish(
+                                        id,
+                                        graphql::Response::builder().errors(errors).build(),
+                                    )
+                                    .await;
+                            }
+
                             notify.try_delete(id);
                             Ok(router::Response {
                                 response: http::Response::builder()
