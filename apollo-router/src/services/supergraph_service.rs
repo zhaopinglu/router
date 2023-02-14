@@ -1069,7 +1069,7 @@ mod tests {
     async fn subscription_with_callback() {
         let subgraphs = MockedSubgraphs([
             ("user", MockSubgraph::builder().with_json(
-                    serde_json::json!{{"query":"subscription{userWasCreated{name activeOrganization{__typename id}}}", "extensions": {"callback_url": "http://localhost:4545/callback/subscription_id"}}},
+                    serde_json::json!{{"query":"subscription{userWasCreated{name activeOrganization{__typename id}}}", "extensions": {"subscription": {"subscription_id": "subscription_id", "callback_url": "http://localhost:4545/callback/subscription_id"}}}},
                     serde_json::json!{{"data": {"userWasCreated": { "__typename": "User", "id": "1", "activeOrganization": { "__typename": "Organization", "id": "0" } }}}}
                 ).build()),
             ("orga", MockSubgraph::builder().with_json(

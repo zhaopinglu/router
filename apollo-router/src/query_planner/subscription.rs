@@ -3,6 +3,7 @@ use futures::future;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
+use serde::Serialize;
 use serde_json_bytes::Value;
 use tower::ServiceExt;
 use tracing_futures::Instrument;
@@ -218,8 +219,10 @@ impl SubscriptionNode {
                             parameters,
                             current_dir,
                             parent_value,
-                            subscription_id,
-                            callback_url,
+                            SubscriptionExtension {
+                                callback_url,
+                                subscription_id,
+                            },
                         )
                         .instrument(tracing::info_span!(
                             SUBSCRIBE_SPAN_NAME,
@@ -288,8 +291,7 @@ impl SubscriptionNode {
         parameters: &'a ExecutionParameters<'a>,
         current_dir: &'a Path,
         data: &Value,
-        subscription_id: Uuid,
-        callback_url: url::Url,
+        subscription_extension: SubscriptionExtension,
     ) -> Result<Vec<Error>, FetchError> {
         let SubscriptionNode {
             operation,
@@ -317,12 +319,13 @@ impl SubscriptionNode {
         };
         let mut extensions = Object::new();
         extensions.insert(
-            "callback_url",
-            Value::String(callback_url.to_string().into()),
-        );
-        extensions.insert(
-            "subscription_id",
-            Value::String(subscription_id.to_string().into()),
+            "subscription",
+            serde_json_bytes::to_value(subscription_extension).map_err(|err| {
+                FetchError::SubrequestWsError {
+                    service: self.service_name.clone(),
+                    reason: String::from("cannot serialize the subscription extension"),
+                }
+            })?,
         );
         let subgraph_request = SubgraphRequest::builder()
             .supergraph_request(parameters.supergraph_request.clone())
@@ -464,4 +467,10 @@ impl SubscriptionNode {
 
         Ok(response.errors)
     }
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub(crate) struct SubscriptionExtension {
+    subscription_id: Uuid,
+    callback_url: url::Url,
 }

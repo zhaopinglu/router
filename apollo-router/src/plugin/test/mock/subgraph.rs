@@ -89,18 +89,26 @@ impl Service<SubgraphRequest> for MockSubgraph {
 
     fn call(&mut self, mut req: SubgraphRequest) -> Self::Future {
         let body = req.subgraph_request.body_mut();
-        // Redact the callback url because it generates a subscription uuid
-        if let Some(callback_url) = body.extensions.get_mut("callback_url") {
-            let mut cb_url = url::Url::parse(
-                callback_url
-                    .as_str()
-                    .expect("callback_url extension must be a string"),
-            )
-            .expect("callback_url must be a valid URL");
-            cb_url.path_segments_mut().unwrap().pop();
-            cb_url.path_segments_mut().unwrap().push("subscription_id");
+        // Redact the callback url and subscription_id because it generates a subscription uuid
+        if let Some(serde_json_bytes::Value::Object(subscription_ext)) =
+            body.extensions.get_mut("subscription")
+        {
+            if let Some(callback_url) = subscription_ext.get_mut("callback_url") {
+                let mut cb_url = url::Url::parse(
+                    callback_url
+                        .as_str()
+                        .expect("callback_url extension must be a string"),
+                )
+                .expect("callback_url must be a valid URL");
+                cb_url.path_segments_mut().unwrap().pop();
+                cb_url.path_segments_mut().unwrap().push("subscription_id");
 
-            *callback_url = serde_json_bytes::Value::String(cb_url.to_string().into());
+                *callback_url = serde_json_bytes::Value::String(cb_url.to_string().into());
+            }
+            if let Some(subscription_id) = subscription_ext.get_mut("subscription_id") {
+                *subscription_id =
+                    serde_json_bytes::Value::String("subscription_id".to_string().into());
+            }
         }
 
         let response = if let Some(response) = self.mocks.get(body) {

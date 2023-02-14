@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::str::FromStr;
-use std::task::Context;
 use std::task::Poll;
 
 use bytes::Buf;
@@ -18,6 +17,7 @@ use tower::ServiceBuilder;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use crate::context::Context;
 use crate::graphql;
 use crate::graphql::Response;
 use crate::json_ext::Object;
@@ -178,7 +178,16 @@ impl Plugin for Subscription {
 #[serde(tag = "kind", rename = "lowercase")]
 pub(crate) enum CallbackPayload {
     #[serde(rename = "subscription")]
-    Subscription { payload: Response, id: Uuid },
+    Subscription(SubscriptionPayload),
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(tag = "action", rename = "lowercase")]
+pub(crate) enum SubscriptionPayload {
+    #[serde(rename = "next")]
+    Next { payload: Response, id: Uuid },
+    #[serde(rename = "complete")]
+    Complete { id: Uuid },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -204,7 +213,7 @@ impl Service<router::Request> for CallbackService {
     type Error = BoxError;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         Ok(()).into()
     }
 
@@ -254,8 +263,14 @@ impl Service<router::Request> for CallbackService {
                     };
 
                     match cb_body {
-                        CallbackPayload::Subscription { payload: data, .. } => {
-                            let mut handle = match notify.subscribe_if_exist(sub_id).await {
+                        CallbackPayload::Subscription(SubscriptionPayload::Next {
+                            payload,
+                            id,
+                        }) => {
+                            if let Some(res) = assert_ids(&req.context, &sub_id, &id) {
+                                return Ok(res);
+                            }
+                            let mut handle = match notify.subscribe_if_exist(id).await {
                                 Some(handle) => handle,
                                 None => {
                                     return Ok(router::Response {
@@ -268,17 +283,30 @@ impl Service<router::Request> for CallbackService {
                                 }
                             };
 
-                            handle.publish(sub_id, data).await?;
+                            handle.publish(id, payload).await?;
+
+                            Ok(router::Response {
+                                response: http::Response::builder()
+                                    .status(StatusCode::OK)
+                                    .body::<hyper::Body>("".into())
+                                    .map_err(BoxError::from)?,
+                                context: req.context,
+                            })
+                        }
+                        CallbackPayload::Subscription(SubscriptionPayload::Complete { id }) => {
+                            if let Some(res) = assert_ids(&req.context, &sub_id, &id) {
+                                return Ok(res);
+                            }
+                            notify.try_delete(id);
+                            Ok(router::Response {
+                                response: http::Response::builder()
+                                    .status(StatusCode::ACCEPTED)
+                                    .body::<hyper::Body>("".into())
+                                    .map_err(BoxError::from)?,
+                                context: req.context,
+                            })
                         }
                     }
-
-                    Ok(router::Response {
-                        response: http::Response::builder()
-                            .status(StatusCode::OK)
-                            .body::<hyper::Body>("".into())
-                            .map_err(BoxError::from)?,
-                        context: req.context,
-                    })
                 }
                 Method::DELETE => {
                     let cb_body = hyper::body::to_bytes(body)
@@ -306,8 +334,11 @@ impl Service<router::Request> for CallbackService {
                     };
 
                     match cb_body {
-                        DeleteCallbackPayload::Subscription { .. } => {
-                            notify.try_delete(sub_id);
+                        DeleteCallbackPayload::Subscription { id } => {
+                            if let Some(res) = assert_ids(&req.context, &sub_id, &id) {
+                                return Ok(res);
+                            }
+                            notify.try_delete(id);
                             Ok(router::Response {
                                 response: http::Response::builder()
                                     .status(StatusCode::ACCEPTED)
@@ -328,6 +359,24 @@ impl Service<router::Request> for CallbackService {
             }
         })
     }
+}
+
+fn assert_ids(
+    context: &Context,
+    id_from_path: &Uuid,
+    id_from_body: &Uuid,
+) -> Option<router::Response> {
+    if id_from_path != id_from_body {
+        return Some(router::Response {
+            response: http::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body::<hyper::Body>("id from url path and id from body are different".into())
+                .expect("this body is valid"),
+            context: context.clone(),
+        });
+    }
+
+    None
 }
 
 // #[cfg(test)]
