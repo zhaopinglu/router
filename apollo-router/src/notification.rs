@@ -212,6 +212,7 @@ where
     let mut pubsub: PubSub<K, V> = PubSub::default();
 
     while let Some(message) = receiver.next().await {
+        pubsub.clean();
         match message {
             Notification::Subscribe {
                 topic,
@@ -313,6 +314,24 @@ where
     /// Check if the topic exists
     fn exist(&self, topic: &K) -> bool {
         self.subscriptions.contains_key(topic)
+    }
+
+    /// clean all closed channels
+    fn clean(&mut self) {
+        self.subscriptions.retain(|_topic, subscribers| {
+            subscribers.retain(|id| match self.subscribers.get(id) {
+                Some(s) => {
+                    if s.is_closed() {
+                        self.subscribers.remove(id);
+                        false
+                    } else {
+                        true
+                    }
+                }
+                None => false,
+            });
+            !subscribers.is_empty()
+        });
     }
 
     async fn delete(&mut self, topic: K) {

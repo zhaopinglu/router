@@ -161,9 +161,10 @@ impl Plugin for Subscription {
         if let SubscriptionMode::Callback(CallbackMode { listen, path, .. }) = &self.mode {
             let path = path.clone().unwrap_or_else(default_path);
             if self.enabled {
+                let path = path.trim_end_matches('/');
                 let endpoint = Endpoint::from_router_service(
-                    format!("{}/:callback", path.trim_end_matches('/')),
-                    CallbackService::new(self.notify.clone()).boxed(),
+                    format!("{path}/:callback"),
+                    CallbackService::new(self.notify.clone(), path.to_string()).boxed(),
                 );
                 map.insert(listen.clone().unwrap_or_else(default_listen_addr), endpoint);
             }
@@ -208,11 +209,12 @@ pub(crate) enum DeleteCallbackPayload {
 #[derive(Clone)]
 pub(crate) struct CallbackService {
     notify: Notify<Uuid, graphql::Response>,
+    path: String,
 }
 
 impl CallbackService {
-    pub(crate) fn new(notify: Notify<Uuid, graphql::Response>) -> Self {
-        Self { notify }
+    pub(crate) fn new(notify: Notify<Uuid, graphql::Response>, path: String) -> Self {
+        Self { notify, path }
     }
 }
 
@@ -227,21 +229,23 @@ impl Service<router::Request> for CallbackService {
 
     fn call(&mut self, req: router::Request) -> Self::Future {
         let mut notify = self.notify.clone();
+        let path = self.path.clone();
         Box::pin(async move {
             let (parts, body) = req.router_request.into_parts();
-            let sub_id =
-                match uuid::Uuid::from_str(parts.uri.path().trim_start_matches("/callback/")) {
-                    Ok(sub_id) => sub_id,
-                    Err(_) => {
-                        return Ok(router::Response {
-                            response: http::Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body::<hyper::Body>("cannot convert the subscription id".into())
-                                .map_err(BoxError::from)?,
-                            context: req.context,
-                        });
-                    }
-                };
+            let sub_id = match uuid::Uuid::from_str(
+                parts.uri.path().trim_start_matches(&format!("{path}/")),
+            ) {
+                Ok(sub_id) => sub_id,
+                Err(_) => {
+                    return Ok(router::Response {
+                        response: http::Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .body::<hyper::Body>("cannot convert the subscription id".into())
+                            .map_err(BoxError::from)?,
+                        context: req.context,
+                    });
+                }
+            };
 
             match parts.method {
                 Method::POST => {
@@ -314,6 +318,7 @@ impl Service<router::Request> for CallbackService {
                                     context: req.context,
                                 })
                             } else {
+                                println!("ICIIII");
                                 Ok(router::Response {
                                     response: http::Response::builder()
                                         .status(StatusCode::NOT_FOUND)
@@ -430,147 +435,382 @@ fn assert_ids(
     None
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use http::Method;
-//     use http::StatusCode;
-//     use serde_json::json;
-//     use tower::ServiceExt;
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
 
-//     use super::*;
-//     use crate::graphql;
-//     use crate::graphql::Response;
-//     use crate::http_ext::Request;
-//     use crate::plugin::test::MockExecutionService;
-//     use crate::plugin::PluginInit;
-//     use crate::query_planner::fetch::OperationKind;
-//     use crate::query_planner::PlanNode;
-//     use crate::query_planner::QueryPlan;
+    use futures::StreamExt;
+    use serde_json::Value;
+    use serde_json_bytes::json;
+    use tower::util::BoxService;
+    use tower::Service;
+    use tower::ServiceExt;
 
-//     #[tokio::test]
-//     async fn it_lets_queries_pass_through() {
-//         let mut mock_service = MockExecutionService::new();
+    use super::*;
+    use crate::error::FetchError;
+    use crate::graphql::Request;
+    use crate::http_ext;
+    use crate::plugin::test::MockSubgraphService;
+    use crate::plugin::test::MockSupergraphService;
+    use crate::plugin::DynPlugin;
+    use crate::services::SubgraphRequest;
+    use crate::services::SubgraphResponse;
+    use crate::services::SupergraphRequest;
+    use crate::services::SupergraphResponse;
+    use crate::Notify;
 
-//         mock_service
-//             .expect_call()
-//             .times(1)
-//             .returning(move |_| Ok(ExecutionResponse::fake_builder().build().unwrap()));
+    #[tokio::test(flavor = "multi_thread")]
+    async fn it_test_callback_endpoint() {
+        // let mut mock_service = MockSupergraphService::new();
+        // mock_service
+        //     .expect_call()
+        //     .times(1)
+        //     .returning(move |req: SupergraphRequest| {
+        //         Ok(SupergraphResponse::fake_builder()
+        //             .context(req.context)
+        //             .data(json!({"data": {"my_value": 2usize}}))
+        //             .build()
+        //             .unwrap())
+        //     });
 
-//         let service_stack = ForbidMutations::new(PluginInit::new(
-//             ForbidMutationsConfig(true),
-//             Default::default(),
-//         ))
-//         .await
-//         .expect("couldn't create forbid_mutations plugin")
-//         .execution_service(mock_service.boxed());
+        // let mut mock_subgraph_service = MockSubgraphService::new();
+        // mock_subgraph_service
+        //     .expect_call()
+        //     .times(1)
+        //     .returning(move |req: SubgraphRequest| {
+        //         Ok(SubgraphResponse::fake_builder()
+        //             .context(req.context)
+        //             .build())
+        //     });
 
-//         let request = create_request(Method::GET, OperationKind::Query);
+        // let mut mock_subgraph_service_in_error = MockSubgraphService::new();
+        // mock_subgraph_service_in_error
+        //     .expect_call()
+        //     .times(1)
+        //     .returning(move |_req: SubgraphRequest| {
+        //         Err(Box::new(FetchError::SubrequestWsError {
+        //             service: String::from("my_subgraph_name_error"),
+        //             reason: String::from("cannot contact the subgraph"),
+        //         }))
+        //     });
+        let mut notify = Notify::new();
+        let dyn_plugin: Box<dyn DynPlugin> = crate::plugin::plugins()
+            .find(|factory| factory.name == "apollo.subscription")
+            .expect("Plugin not found")
+            .create_instance(
+                &Value::from_str(
+                    r#"{
+                "enabled": true,
+                "mode": {
+                    "callback": {
+                        "public_url": "http://localhost:4000",
+                        "path": "/subscription/callback"
+                    }
+                }
+            }"#,
+                )
+                .unwrap(),
+                Default::default(),
+                notify.clone(),
+            )
+            .await
+            .unwrap();
+        // let mut supergraph_service = dyn_plugin.supergraph_service(BoxService::new(mock_service));
+        // let router_req = SupergraphRequest::fake_builder().header("test", "my_value_set");
 
-//         let _ = service_stack
-//             .oneshot(request)
-//             .await
-//             .unwrap()
-//             .next_response()
-//             .await
-//             .unwrap();
-//     }
+        // let _router_response = supergraph_service
+        //     .ready()
+        //     .await
+        //     .unwrap()
+        //     .call(router_req.build().unwrap())
+        //     .await
+        //     .unwrap()
+        //     .next_response()
+        //     .await
+        //     .unwrap();
 
-//     #[tokio::test]
-//     async fn it_doesnt_let_mutations_pass_through() {
-//         let expected_error = Error::builder()
-//             .message("Mutations are forbidden".to_string())
-//             .extension_code("MUTATION_FORBIDDEN")
-//             .build();
-//         let expected_status = StatusCode::BAD_REQUEST;
+        // let router_req = SupergraphRequest::fake_builder()
+        //     .header(
+        //         "accept",
+        //         "multipart/mixed; boundary=\"graphql\", application/json",
+        //     )
+        //     .query("subscription {\n  userWasCreated {\n    username\n  }\n}");
 
-//         let service_stack = ForbidMutations::new(PluginInit::new(
-//             ForbidMutationsConfig(true),
-//             Default::default(),
-//         ))
-//         .await
-//         .expect("couldn't create forbid_mutations plugin")
-//         .execution_service(MockExecutionService::new().boxed());
-//         let request = create_request(Method::GET, OperationKind::Mutation);
+        // let _router_response = bad_request_supergraph_service
+        //     .ready()
+        //     .await
+        //     .unwrap()
+        //     .call(router_req.build().unwrap())
+        //     .await
+        //     .unwrap()
+        //     .next_response()
+        //     .await
+        //     .unwrap();
 
-//         let mut actual_error = service_stack.oneshot(request).await.unwrap();
+        // let mut subgraph_service =
+        //     dyn_plugin.subgraph_service("my_subgraph_name", BoxService::new(mock_subgraph_service));
+        // let subgraph_req = SubgraphRequest::fake_builder()
+        //     .subgraph_request(
+        //         http_ext::Request::fake_builder()
+        //             .header("test", "my_value_set")
+        //             .body(
+        //                 Request::fake_builder()
+        //                     .query(String::from(
+        //                         "subscription {\n  userWasCreated {\n    username\n  }\n}",
+        //                     ))
+        //                     .extensions()
+        //                     .build(),
+        //             )
+        //             .build()
+        //             .unwrap(),
+        //     )
+        //     .build();
+        // let _subgraph_response = subgraph_service
+        //     .ready()
+        //     .await
+        //     .unwrap()
+        //     .call(subgraph_req)
+        //     .await
+        //     .unwrap();
+        // // Another subgraph
+        // let mut subgraph_service = dyn_plugin.subgraph_service(
+        //     "my_subgraph_name_error",
+        //     BoxService::new(mock_subgraph_service_in_error),
+        // );
+        // let subgraph_req = SubgraphRequest::fake_builder()
+        //     .subgraph_request(
+        //         http_ext::Request::fake_builder()
+        //             .header("test", "my_value_set")
+        //             .body(
+        //                 Request::fake_builder()
+        //                     .query(String::from("query { test }"))
+        //                     .build(),
+        //             )
+        //             .build()
+        //             .unwrap(),
+        //     )
+        //     .build();
+        // let _subgraph_response = subgraph_service
+        //     .ready()
+        //     .await
+        //     .unwrap()
+        //     .call(subgraph_req)
+        //     .await
+        //     .expect_err("Must be in error");
 
-//         assert_eq!(expected_status, actual_error.response.status());
-//         assert_error_matches(&expected_error, actual_error.next_response().await.unwrap());
-//     }
+        let http_req_prom = http::Request::get("http://localhost:4000/subscription/callback")
+            .body(Default::default())
+            .unwrap();
+        let mut web_endpoint = dyn_plugin
+            .web_endpoints()
+            .into_iter()
+            .next()
+            .unwrap()
+            .1
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_router();
+        let resp = web_endpoint
+            .ready()
+            .await
+            .unwrap()
+            .call(http_req_prom)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+        let new_sub_id = uuid::Uuid::new_v4();
+        let mut handler = notify.subscribe(new_sub_id).await.unwrap();
 
-//     #[tokio::test]
-//     async fn configuration_set_to_false_lets_mutations_pass_through() {
-//         let mut mock_service = MockExecutionService::new();
+        let http_req = http::Request::post(format!(
+            "http://localhost:4000/subscription/callback/{new_sub_id}"
+        ))
+        .body(hyper::Body::from(
+            serde_json::to_vec(&CallbackPayload::Subscription(SubscriptionPayload::Init {
+                id: new_sub_id,
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+        let resp = web_endpoint.clone().oneshot(http_req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
 
-//         mock_service
-//             .expect_call()
-//             .times(1)
-//             .returning(move |_| Ok(ExecutionResponse::fake_builder().build().unwrap()));
+        let http_req = http::Request::post(format!(
+            "http://localhost:4000/subscription/callback/{new_sub_id}"
+        ))
+        .body(hyper::Body::from(
+            serde_json::to_vec(&CallbackPayload::Subscription(SubscriptionPayload::Next {
+                id: new_sub_id,
+                payload: graphql::Response::builder()
+                    .data(serde_json_bytes::json!({"userWasCreated": {"username": "ada_lovelace"}}))
+                    .build(),
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+        let resp = web_endpoint.clone().oneshot(http_req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        let msg = handler.receiver().next().await.unwrap();
 
-//         let service_stack = ForbidMutations::new(PluginInit::new(
-//             ForbidMutationsConfig(false),
-//             Default::default(),
-//         ))
-//         .await
-//         .expect("couldn't create forbid_mutations plugin")
-//         .execution_service(mock_service.boxed());
+        assert_eq!(
+            msg,
+            graphql::Response::builder()
+                .data(serde_json_bytes::json!({"userWasCreated": {"username": "ada_lovelace"}}))
+                .build()
+        );
+        drop(handler);
 
-//         let request = create_request(Method::GET, OperationKind::Mutation);
+        // Should answer NOT FOUND because I dropped the only existing handler and so no one is still listening to the sub
+        let http_req = http::Request::post(format!(
+            "http://localhost:4000/subscription/callback/{new_sub_id}"
+        ))
+        .body(hyper::Body::from(
+            serde_json::to_vec(&CallbackPayload::Subscription(SubscriptionPayload::Next {
+                id: new_sub_id,
+                payload: graphql::Response::builder()
+                    .data(serde_json_bytes::json!({"userWasCreated": {"username": "ada_lovelace"}}))
+                    .build(),
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+        let resp = web_endpoint.oneshot(http_req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+    }
 
-//         let _ = service_stack
-//             .oneshot(request)
-//             .await
-//             .unwrap()
-//             .next_response()
-//             .await
-//             .unwrap();
-//     }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn it_test_callback_endpoint_with_complete_subscription() {
+        let mut notify = Notify::new();
+        let dyn_plugin: Box<dyn DynPlugin> = crate::plugin::plugins()
+            .find(|factory| factory.name == "apollo.subscription")
+            .expect("Plugin not found")
+            .create_instance(
+                &Value::from_str(
+                    r#"{
+                "enabled": true,
+                "mode": {
+                    "callback": {
+                        "public_url": "http://localhost:4000",
+                        "path": "/subscription/callback"
+                    }
+                }
+            }"#,
+                )
+                .unwrap(),
+                Default::default(),
+                notify.clone(),
+            )
+            .await
+            .unwrap();
 
-//     fn assert_error_matches(expected_error: &Error, response: Response) {
-//         assert_eq!(&response.errors[0], expected_error);
-//     }
+        let http_req_prom = http::Request::get("http://localhost:4000/subscription/callback")
+            .body(Default::default())
+            .unwrap();
+        let mut web_endpoint = dyn_plugin
+            .web_endpoints()
+            .into_iter()
+            .next()
+            .unwrap()
+            .1
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_router();
+        let resp = web_endpoint
+            .ready()
+            .await
+            .unwrap()
+            .call(http_req_prom)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+        let new_sub_id = uuid::Uuid::new_v4();
+        let mut handler = notify.subscribe(new_sub_id).await.unwrap();
 
-//     fn create_request(method: Method, operation_kind: OperationKind) -> ExecutionRequest {
-//         let root: PlanNode = if operation_kind == OperationKind::Mutation {
-//             serde_json::from_value(json!({
-//                 "kind": "Sequence",
-//                 "nodes": [
-//                     {
-//                         "kind": "Fetch",
-//                         "serviceName": "product",
-//                         "variableUsages": [],
-//                         "operation": "{__typename}",
-//                         "operationKind": "mutation"
-//                       },
-//                 ]
-//             }))
-//             .unwrap()
-//         } else {
-//             serde_json::from_value(json!({
-//                 "kind": "Sequence",
-//                 "nodes": [
-//                     {
-//                         "kind": "Fetch",
-//                         "serviceName": "product",
-//                         "variableUsages": [],
-//                         "operation": "{__typename}",
-//                         "operationKind": "query"
-//                       },
-//                 ]
-//             }))
-//             .unwrap()
-//         };
+        let http_req = http::Request::post(format!(
+            "http://localhost:4000/subscription/callback/{new_sub_id}"
+        ))
+        .body(hyper::Body::from(
+            serde_json::to_vec(&CallbackPayload::Subscription(SubscriptionPayload::Init {
+                id: new_sub_id,
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+        let resp = web_endpoint.clone().oneshot(http_req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
 
-//         let request = Request::fake_builder()
-//             .method(method)
-//             .body(graphql::Request::default())
-//             .build()
-//             .expect("expecting valid request");
-//         ExecutionRequest::fake_builder()
-//             .supergraph_request(request)
-//             .query_plan(QueryPlan::fake_builder().root(root).build())
-//             .build()
-//     }
-// }
+        let http_req = http::Request::post(format!(
+            "http://localhost:4000/subscription/callback/{new_sub_id}"
+        ))
+        .body(hyper::Body::from(
+            serde_json::to_vec(&CallbackPayload::Subscription(SubscriptionPayload::Next {
+                id: new_sub_id,
+                payload: graphql::Response::builder()
+                    .data(serde_json_bytes::json!({"userWasCreated": {"username": "ada_lovelace"}}))
+                    .build(),
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+        let resp = web_endpoint.clone().oneshot(http_req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        let msg = handler.receiver().next().await.unwrap();
+
+        assert_eq!(
+            msg,
+            graphql::Response::builder()
+                .data(serde_json_bytes::json!({"userWasCreated": {"username": "ada_lovelace"}}))
+                .build()
+        );
+
+        let http_req = http::Request::post(format!(
+            "http://localhost:4000/subscription/callback/{new_sub_id}"
+        ))
+        .body(hyper::Body::from(
+            serde_json::to_vec(&CallbackPayload::Subscription(
+                SubscriptionPayload::Complete {
+                    id: new_sub_id,
+                    errors: Some(vec![graphql::Error::builder()
+                        .message("cannot complete the subscription")
+                        .extension_code("SUBSCRIPTION_ERROR")
+                        .build()]),
+                },
+            ))
+            .unwrap(),
+        ))
+        .unwrap();
+        let resp = web_endpoint.clone().oneshot(http_req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::ACCEPTED);
+        let msg = handler.receiver().next().await.unwrap();
+
+        assert_eq!(
+            msg,
+            graphql::Response::builder()
+                .errors(vec![graphql::Error::builder()
+                    .message("cannot complete the subscription")
+                    .extension_code("SUBSCRIPTION_ERROR")
+                    .build()])
+                .build()
+        );
+
+        // Should answer NOT FOUND because we completed the sub
+        let http_req = http::Request::post(format!(
+            "http://localhost:4000/subscription/callback/{new_sub_id}"
+        ))
+        .body(hyper::Body::from(
+            serde_json::to_vec(&CallbackPayload::Subscription(SubscriptionPayload::Next {
+                id: new_sub_id,
+                payload: graphql::Response::builder()
+                    .data(serde_json_bytes::json!({"userWasCreated": {"username": "ada_lovelace"}}))
+                    .build(),
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+        let resp = web_endpoint.oneshot(http_req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+    }
+}
 
 register_plugin!("apollo", "subscription", Subscription);
