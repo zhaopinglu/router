@@ -212,6 +212,7 @@ uname = "0.1.1"
 uname = "0.1.1"
 
 [dev-dependencies]
+axum = { version = "0.6.6", features = ["headers", "json", "original-uri", "ws"] }
 insta = { version = "1.26.0", features = ["json", "redactions", "yaml"] }
 introspector-gadget = "0.2.0"
 maplit = "1.0.2"

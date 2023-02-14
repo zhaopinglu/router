@@ -320,7 +320,7 @@ impl SubscriptionNode {
         let mut extensions = Object::new();
         extensions.insert(
             "subscription",
-            serde_json_bytes::to_value(subscription_extension).map_err(|err| {
+            serde_json_bytes::to_value(subscription_extension).map_err(|_err| {
                 FetchError::SubrequestWsError {
                     service: self.service_name.clone(),
                     reason: String::from("cannot serialize the subscription extension"),

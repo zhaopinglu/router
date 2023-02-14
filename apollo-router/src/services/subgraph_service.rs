@@ -706,8 +706,16 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
 
+    use axum::extract::ws::Message;
+    use axum::extract::ConnectInfo;
+    use axum::extract::WebSocketUpgrade;
+    use axum::response::IntoResponse;
+    use axum::routing::get;
+    use axum::Router;
     use axum::Server;
     use bytes::Buf;
+    use futures::channel::mpsc;
+    use futures::StreamExt;
     use http::header::HOST;
     use http::StatusCode;
     use http::Uri;
@@ -720,9 +728,12 @@ mod tests {
     use SubgraphRequest;
 
     use super::*;
+    use crate::context;
     use crate::graphql::Error;
     use crate::graphql::Request;
     use crate::graphql::Response;
+    use crate::protocols::websocket::ClientMessage;
+    use crate::protocols::websocket::ServerMessage;
     use crate::query_planner::fetch::OperationKind;
     use crate::Context;
 
@@ -1142,6 +1153,179 @@ mod tests {
         let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle)) });
         let server = Server::bind(&socket_addr).serve(make_svc);
         server.await.unwrap();
+    }
+
+    async fn emulate_correct_websocket_server(socket_addr: SocketAddr) {
+        async fn ws_handler(
+            ws: WebSocketUpgrade,
+            ConnectInfo(_addr): ConnectInfo<SocketAddr>,
+        ) -> Result<impl IntoResponse, Infallible> {
+            // finalize the upgrade process by returning upgrade callback.
+            // we can customize the callback by sending additional info such as address.
+            let res = ws.on_upgrade(move |mut socket| async move {
+                let connection_ack = socket.recv().await.unwrap().unwrap().into_text().unwrap();
+                let ack_msg: ClientMessage = serde_json::from_str(&connection_ack).unwrap();
+                assert!(matches!(ack_msg, ClientMessage::ConnectionInit { .. }));
+
+                socket
+                    .send(Message::Text(
+                        serde_json::to_string(&ServerMessage::ConnectionAck).unwrap(),
+                    ))
+                    .await
+                    .unwrap();
+                let new_message = socket.recv().await.unwrap().unwrap().into_text().unwrap();
+                let subscribe_msg: ClientMessage = serde_json::from_str(&new_message).unwrap();
+                assert!(matches!(subscribe_msg, ClientMessage::Subscribe { .. }));
+                if let ClientMessage::Subscribe { payload, .. } = subscribe_msg {
+                    assert_eq!(
+                        payload,
+                        Request::builder()
+                            .query("subscription {\n  userWasCreated {\n    username\n  }\n}")
+                            .build()
+                    );
+                }
+
+                socket
+                    .send(Message::Text(
+                        serde_json::to_string(&ServerMessage::Next { id: uuid::Uuid::new_v4().to_string(), payload: graphql::Response::builder().data(serde_json_bytes::json!({"userWasCreated": {"username": "ada_lovelace"}})).build() }).unwrap(),
+                    ))
+                    .await
+                    .unwrap();
+            });
+
+            Ok(res)
+        }
+
+        let app = Router::new().route("/ws", get(ws_handler));
+        let server = Server::bind(&socket_addr)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>());
+        server.await.unwrap();
+    }
+
+    async fn emulate_incorrect_websocket_server(socket_addr: SocketAddr) {
+        async fn ws_handler(
+            _ws: WebSocketUpgrade,
+            ConnectInfo(_addr): ConnectInfo<SocketAddr>,
+        ) -> Result<impl IntoResponse, Infallible> {
+            Ok((http::StatusCode::BAD_REQUEST, "bad request"))
+        }
+
+        let app = Router::new().route("/ws", get(ws_handler));
+        let server = Server::bind(&socket_addr)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>());
+        server.await.unwrap();
+    }
+
+    fn subscription_context() -> context::Context {
+        let ctx = context::Context::new();
+        ctx.insert(
+            SUBSCRIPTION_MODE_CONTEXT_KEY,
+            SubscriptionMode::Passthrough(PassthroughMode {
+                subgraphs: [(
+                    "test".to_string(),
+                    WebSocketConfiguration {
+                        path: Some(String::from("/ws")),
+                        protocol: WebSocketProtocol::default(),
+                    },
+                )]
+                .into(),
+            }),
+        )
+        .unwrap();
+
+        ctx
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_subgraph_service_websocket() {
+        let socket_addr = SocketAddr::from_str("127.0.0.1:2222").unwrap();
+        tokio::task::spawn(emulate_correct_websocket_server(socket_addr));
+        let subgraph_service = SubgraphService::new("test", true, None);
+        let (tx, mut rx) = mpsc::channel(2);
+
+        let url = Uri::from_str(&format!("ws://{socket_addr}")).unwrap();
+        let response = subgraph_service
+            .oneshot(SubgraphRequest {
+                supergraph_request: Arc::new(
+                    http::Request::builder()
+                        .header(HOST, "host")
+                        .header(CONTENT_TYPE, APPLICATION_JSON.essence_str())
+                        .body(
+                            Request::builder()
+                                .query("subscription {\n  userWasCreated {\n    username\n  }\n}")
+                                .build(),
+                        )
+                        .expect("expecting valid request"),
+                ),
+                subgraph_request: http::Request::builder()
+                    .header(HOST, "rhost")
+                    .header(CONTENT_TYPE, APPLICATION_JSON.essence_str())
+                    .uri(url)
+                    .body(
+                        Request::builder()
+                            .query("subscription {\n  userWasCreated {\n    username\n  }\n}")
+                            .build(),
+                    )
+                    .expect("expecting valid request"),
+                operation_kind: OperationKind::Subscription,
+                context: subscription_context(),
+                ws_stream: Some(tx),
+            })
+            .await
+            .unwrap();
+        assert!(response.response.body().errors.is_empty());
+
+        let mut gql_stream = rx.next().await.unwrap();
+        let message = gql_stream.next().await.unwrap();
+        assert_eq!(
+            message,
+            graphql::Response::builder()
+                .data(serde_json_bytes::json!({"userWasCreated": {"username": "ada_lovelace"}}))
+                .build()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_subgraph_service_websocket_with_error() {
+        let socket_addr = SocketAddr::from_str("127.0.0.1:2323").unwrap();
+        tokio::task::spawn(emulate_incorrect_websocket_server(socket_addr));
+        let subgraph_service = SubgraphService::new("test", true, None);
+        let (tx, _rx) = mpsc::channel(2);
+
+        let url = Uri::from_str(&format!("ws://{socket_addr}")).unwrap();
+        let err = subgraph_service
+            .oneshot(SubgraphRequest {
+                supergraph_request: Arc::new(
+                    http::Request::builder()
+                        .header(HOST, "host")
+                        .header(CONTENT_TYPE, APPLICATION_JSON.essence_str())
+                        .body(
+                            Request::builder()
+                                .query("subscription {\n  userWasCreated {\n    username\n  }\n}")
+                                .build(),
+                        )
+                        .expect("expecting valid request"),
+                ),
+                subgraph_request: http::Request::builder()
+                    .header(HOST, "rhost")
+                    .header(CONTENT_TYPE, APPLICATION_JSON.essence_str())
+                    .uri(url)
+                    .body(
+                        Request::builder()
+                            .query("subscription {\n  userWasCreated {\n    username\n  }\n}")
+                            .build(),
+                    )
+                    .expect("expecting valid request"),
+                operation_kind: OperationKind::Subscription,
+                context: subscription_context(),
+                ws_stream: Some(tx),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Websocket fetch failed from 'test': cannot connect websocket to subgraph: HTTP error: 400 Bad Request".to_string()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

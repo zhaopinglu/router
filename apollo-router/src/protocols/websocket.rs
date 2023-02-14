@@ -43,7 +43,7 @@ impl From<WebSocketProtocol> for HeaderValue {
 }
 
 /// A websocket message received from the client
-#[derive(Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)] // Request is at fault
 pub(crate) enum ClientMessage {
@@ -88,7 +88,7 @@ pub(crate) enum ClientMessage {
     },
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ServerMessage {
     ConnectionAck,
@@ -123,10 +123,10 @@ pub(crate) enum ServerMessage {
 impl ServerMessage {
     fn into_graphql_response(self) -> (Option<graphql::Response>, bool) {
         match self {
-            ServerMessage::Next { id, payload } | ServerMessage::Data { id, payload } => {
+            ServerMessage::Next { id: _, payload } | ServerMessage::Data { id: _, payload } => {
                 (Some(payload), false)
             }
-            ServerMessage::Error { id, payload } => (
+            ServerMessage::Error { id: _, payload } => (
                 Some(graphql::Response::builder().errors(payload).build()),
                 true,
             ),
