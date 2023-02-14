@@ -294,7 +294,16 @@ async fn call_websocket(
     let (parts, body) = subgraph_request.into_parts();
 
     let request = get_websocket_request(service_name.clone(), parts, subgraph_cfg)?;
-    let (ws_stream, resp) = match request.uri().scheme_str() {
+    let display_headers = context.contains_key(LOGGING_DISPLAY_HEADERS);
+    let display_body = context.contains_key(LOGGING_DISPLAY_BODY);
+    if display_headers {
+        tracing::info!(http.request.headers = ?request.headers(), apollo.subgraph.name = %service_name, "Websocket request headers to subgraph {service_name:?}");
+    }
+    if display_body {
+        tracing::info!(http.request.body = ?request.body(), apollo.subgraph.name = %service_name, "Websocket request body to subgraph {service_name:?}");
+    }
+
+    let (ws_stream, mut resp) = match request.uri().scheme_str() {
         Some("wss") => connect_async_tls_with_config(request, None, None).await,
         _ => connect_async(request).await,
     }
@@ -302,6 +311,12 @@ async fn call_websocket(
         service: service_name.clone(),
         reason: format!("cannot connect websocket to subgraph: {err}"),
     })?;
+
+    if display_body {
+        tracing::info!(
+            response.body = %String::from_utf8_lossy(&resp.body_mut().take().unwrap_or_default()), apollo.subgraph.name = %service_name, "Raw response body from subgraph {service_name:?} received"
+        );
+    }
 
     let sub_uuid = Uuid::new_v4();
     let mut gql_stream =

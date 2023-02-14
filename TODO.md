@@ -1,4 +1,4 @@
-+ Add support to log websocket calls/responses and callback calls
++ Implement keep alive for callback ?
 + Handle errors correctly
 + Fix tests
 + Write new test
