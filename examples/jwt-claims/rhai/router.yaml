@@ -9,4 +9,4 @@ authentication:
 
 rhai:
   scripts: src
-  main: jwt_claims.rhai
+  main: main.rhai
