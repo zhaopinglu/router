@@ -4,12 +4,16 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::time::Duration;
+use std::time::Instant;
 
 use futures::channel::mpsc;
 use futures::channel::mpsc::SendError;
 use futures::channel::oneshot;
 use futures::SinkExt;
+use futures::Stream;
 use futures::StreamExt;
+use tokio_stream::wrappers::IntervalStream;
 use uuid::Uuid;
 
 pub(crate) type NotifyError = SendError;
@@ -25,6 +29,9 @@ enum Notification<K, V> {
         handle: Uuid,
     },
     Delete {
+        topic: K,
+    },
+    KeepAlive {
         topic: K,
     },
     Publish {
@@ -60,7 +67,14 @@ where
 {
     pub(crate) fn new() -> Notify<K, V> {
         let (sender, receiver) = mpsc::channel(10000);
-        tokio::task::spawn(task(receiver));
+        tokio::task::spawn(task(receiver, None));
+        Notify { sender }
+    }
+
+    /// If you want to create a notify with a TTL on unused subscription
+    pub(crate) fn with_ttl(ttl: Duration) -> Notify<K, V> {
+        let (sender, receiver) = mpsc::channel(10000);
+        tokio::task::spawn(task(receiver, Some(ttl)));
         Notify { sender }
     }
 
@@ -125,6 +139,12 @@ where
             Ok(true) => Ok(true),
             _ => Ok(false),
         }
+    }
+
+    pub(crate) async fn keep_alive(&mut self, topic: K) -> Result<(), NotifyError> {
+        self.sender.send(Notification::KeepAlive { topic }).await?;
+
+        Ok(())
     }
 
     pub(crate) fn try_delete(&mut self, topic: K) {
@@ -204,49 +224,100 @@ impl<K, V> Handle<K, V> {
     }
 }
 
-async fn task<K, V>(mut receiver: mpsc::Receiver<Notification<K, V>>)
+impl<K, V> Drop for Handle<K, V> {
+    fn drop(&mut self) {
+        let _ = self
+            .sender
+            .try_send(Notification::Unsubscribe { handle: self.id });
+    }
+}
+
+async fn task<K, V>(mut receiver: mpsc::Receiver<Notification<K, V>>, ttl: Option<Duration>)
 where
     K: Send + Hash + Eq + Clone + 'static,
     V: Send + Clone + 'static,
 {
-    let mut pubsub: PubSub<K, V> = PubSub::default();
+    let mut pubsub: PubSub<K, V> = PubSub::new(ttl);
 
-    while let Some(message) = receiver.next().await {
-        pubsub.clean();
-        match message {
-            Notification::Subscribe {
-                topic,
-                handle,
-                sender,
-            } => pubsub.subscribe(topic, handle, sender).await,
-            Notification::Unsubscribe { handle } => pubsub.unsubscribe(handle).await,
-            Notification::Delete { topic } => pubsub.delete(topic).await,
-            Notification::Publish { topic, data } => {
-                pubsub.publish(topic, data).await;
+    let mut ttl_fut: Box<dyn Stream<Item = tokio::time::Instant> + Send + Unpin> = match ttl {
+        Some(ttl) => Box::new(IntervalStream::new(tokio::time::interval(ttl))),
+        None => Box::new(tokio_stream::pending()),
+    };
+
+    loop {
+        tokio::select! {
+            _ = ttl_fut.next() => {
+                pubsub.kill_dead_topics();
+                pubsub.clean();
             }
-            Notification::SubscribeIfExist {
-                topic,
-                handle,
-                sender,
-                response_sender,
-            } => {
-                if pubsub.is_used(&topic, handle) {
-                    let _ = response_sender.send(true);
-                    pubsub.subscribe(topic, handle, sender).await;
-                } else {
-                    let _ = response_sender.send(false);
+            message = receiver.next() => {
+                if ttl.is_none() {
+                    pubsub.clean();
+                }
+                match message {
+                    Some(message) => {
+                        match message {
+                            Notification::Subscribe {
+                                topic,
+                                handle,
+                                sender,
+                            } => pubsub.subscribe(topic, handle, sender),
+                            Notification::Unsubscribe { handle } => pubsub.unsubscribe(handle),
+                            Notification::KeepAlive { topic } => pubsub.touch(&topic),
+                            Notification::Delete { topic } => pubsub.delete(topic),
+                            Notification::Publish { topic, data } => {
+                                pubsub.publish(topic, data).await;
+                            }
+                            Notification::SubscribeIfExist {
+                                topic,
+                                handle,
+                                sender,
+                                response_sender,
+                            } => {
+                                if pubsub.is_used(&topic, handle) {
+                                    let _ = response_sender.send(true);
+                                    pubsub.subscribe(topic, handle, sender);
+                                } else {
+                                    let _ = response_sender.send(false);
+                                }
+                            }
+                            Notification::Exist {
+                                topic,
+                                response_sender,
+                            } => {
+                                let _ = response_sender.send(pubsub.exist(&topic));
+                            }
+                            #[cfg(test)]
+                            Notification::Broadcast { data } => {
+                                pubsub.broadcast(data).await;
+                            }
+                        }
+                    },
+                    None => break,
                 }
             }
-            Notification::Exist {
-                topic,
-                response_sender,
-            } => {
-                let _ = response_sender.send(pubsub.exist(&topic));
-            }
-            #[cfg(test)]
-            Notification::Broadcast { data } => {
-                pubsub.broadcast(data).await;
-            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Subscription {
+    subscribers: HashSet<Uuid>,
+    updated_at: Instant,
+}
+
+impl Subscription {
+    // Update the updated_at value
+    fn touch(&mut self) {
+        self.updated_at = Instant::now();
+    }
+}
+
+impl<const N: usize> From<[Uuid; N]> for Subscription {
+    fn from(value: [Uuid; N]) -> Self {
+        Self {
+            subscribers: value.into(),
+            updated_at: Instant::now(),
         }
     }
 }
@@ -256,7 +327,8 @@ where
     K: Hash + Eq,
 {
     subscribers: HashMap<Uuid, mpsc::Sender<V>>,
-    subscriptions: HashMap<K, HashSet<Uuid>>,
+    subscriptions: HashMap<K, Subscription>,
+    ttl: Option<Duration>,
 }
 
 impl<K, V> Default for PubSub<K, V>
@@ -267,6 +339,7 @@ where
         Self {
             subscribers: HashMap::new(),
             subscriptions: HashMap::new(),
+            ttl: None,
         }
     }
 }
@@ -275,22 +348,32 @@ impl<K, V> PubSub<K, V>
 where
     K: Hash + Eq + Clone,
 {
-    async fn subscribe(&mut self, topic: K, handle: Uuid, sender: mpsc::Sender<V>) {
+    fn new(ttl: Option<Duration>) -> Self {
+        Self {
+            subscribers: HashMap::new(),
+            subscriptions: HashMap::new(),
+            ttl,
+        }
+    }
+
+    fn subscribe(&mut self, topic: K, handle: Uuid, sender: mpsc::Sender<V>) {
         self.subscribers.insert(handle, sender);
         self.subscriptions
             .entry(topic)
             .and_modify(|e| {
-                e.insert(handle);
+                e.touch();
+                e.subscribers.insert(handle);
             })
             .or_insert_with(|| [handle].into());
     }
 
-    async fn unsubscribe(&mut self, handle: Uuid) {
+    fn unsubscribe(&mut self, handle: Uuid) {
         self.subscribers.remove(&handle);
         let mut topics_to_delete = vec![];
-        for (topic, handles) in &mut self.subscriptions {
-            handles.remove(&handle);
-            if handles.is_empty() {
+        for (topic, sub) in &mut self.subscriptions {
+            sub.touch();
+            sub.subscribers.remove(&handle);
+            if sub.subscribers.is_empty() {
                 topics_to_delete.push(topic.clone());
             }
         }
@@ -304,7 +387,8 @@ where
         self.subscriptions
             .get(topic)
             .map(|s| {
-                !s.difference(&[handle].into())
+                !s.subscribers
+                    .difference(&[handle].into())
                     .collect::<HashSet<&Uuid>>()
                     .is_empty()
             })
@@ -312,14 +396,22 @@ where
     }
 
     /// Check if the topic exists
+    fn touch(&mut self, topic: &K) {
+        if let Some(sub) = self.subscriptions.get_mut(topic) {
+            sub.touch();
+        }
+    }
+
+    /// Check if the topic exists
     fn exist(&self, topic: &K) -> bool {
         self.subscriptions.contains_key(topic)
     }
 
+    // TODO this might be useless thanks to the drop impl of handle
     /// clean all closed channels
     fn clean(&mut self) {
-        self.subscriptions.retain(|_topic, subscribers| {
-            subscribers.retain(|id| match self.subscribers.get(id) {
+        self.subscriptions.retain(|_topic, sub| {
+            sub.subscribers.retain(|id| match self.subscribers.get(id) {
                 Some(s) => {
                     if s.is_closed() {
                         self.subscribers.remove(id);
@@ -330,13 +422,28 @@ where
                 }
                 None => false,
             });
-            !subscribers.is_empty()
+            !sub.subscribers.is_empty()
         });
+        // Delete subscribers linked to 0 subscription
+        self.subscribers.retain(|id, _| {
+            self.subscriptions
+                .values()
+                .flat_map(|sub| &sub.subscribers)
+                .any(|e| e == id)
+        })
     }
 
-    async fn delete(&mut self, topic: K) {
-        if let Some(subscribers) = self.subscriptions.remove(&topic) {
-            subscribers.into_iter().for_each(|s| {
+    /// clean all topics which didn't heartbeat
+    fn kill_dead_topics(&mut self) {
+        if let Some(ttl) = self.ttl {
+            self.subscriptions
+                .retain(|_topic, sub| sub.updated_at.elapsed() <= ttl);
+        }
+    }
+
+    fn delete(&mut self, topic: K) {
+        if let Some(sub) = self.subscriptions.remove(&topic) {
+            sub.subscribers.into_iter().for_each(|s| {
                 self.subscribers.remove(&s);
             });
         }
@@ -346,9 +453,11 @@ where
     where
         V: Clone,
     {
-        let subscribers = self.subscriptions.get(&topic)?;
+        let subscription = self.subscriptions.get_mut(&topic)?;
+        subscription.touch();
+
         let mut fut = vec![];
-        for subscriber_handle in subscribers {
+        for subscriber_handle in &subscription.subscribers {
             if let Some(mut sender) = self.subscribers.get(subscriber_handle).cloned() {
                 let cloned_value = value.clone();
                 fut.push(async move {
@@ -366,9 +475,9 @@ where
             self.subscribers.remove(&handle_to_clean);
             self.subscriptions
                 .iter_mut()
-                .for_each(|(_topic, handles)| handles.retain(|h| h != &handle_to_clean));
+                .for_each(|(_topic, sub)| sub.subscribers.retain(|h| h != &handle_to_clean));
         }
-        self.subscriptions.retain(|_k, s| !s.is_empty());
+        self.subscriptions.retain(|_k, s| !s.subscribers.is_empty());
 
         Some(())
     }
@@ -379,8 +488,8 @@ where
         V: Clone,
     {
         let mut fut = vec![];
-        for subscribers in self.subscriptions.values() {
-            for subscriber_handle in subscribers {
+        for sub in self.subscriptions.values() {
+            for subscriber_handle in &sub.subscribers {
                 if let Some(mut sender) = self.subscribers.get(subscriber_handle).cloned() {
                     let cloned_value = value.clone();
                     fut.push(async move {
@@ -399,9 +508,9 @@ where
             self.subscribers.remove(&handle_to_clean);
             self.subscriptions
                 .iter_mut()
-                .for_each(|(_topic, handles)| handles.retain(|h| h != &handle_to_clean));
+                .for_each(|(_topic, sub)| sub.subscribers.retain(|h| h != &handle_to_clean));
         }
-        self.subscriptions.retain(|_k, s| !s.is_empty());
+        self.subscriptions.retain(|_k, s| !s.subscribers.is_empty());
 
         Some(())
     }
@@ -436,5 +545,39 @@ mod tests {
         assert_eq!(new_msg, serde_json_bytes::json!({"test": "ok"}));
         let new_msg = handle_1_other.receiver().next().await.unwrap();
         assert_eq!(new_msg, serde_json_bytes::json!({"test": "ok"}));
+
+        assert!(notify.exist(topic_1).await.unwrap());
+        assert!(notify.exist(topic_2).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn it_test_ttl() {
+        let mut notify = Notify::with_ttl(Duration::from_millis(100));
+        let topic_1 = Uuid::new_v4();
+        let topic_2 = Uuid::new_v4();
+
+        let handle1 = notify.subscribe(topic_1).await.unwrap();
+        let _handle2 = notify.subscribe(topic_2).await.unwrap();
+
+        let mut handle_1_bis = notify.subscribe(topic_1).await.unwrap();
+        let mut handle_1_other = notify.subscribe(topic_1).await.unwrap();
+        let mut cloned_notify = notify.clone();
+        tokio::spawn(async move {
+            cloned_notify
+                .publish(topic_1, serde_json_bytes::json!({"test": "ok"}))
+                .await
+                .unwrap();
+        });
+        drop(handle1);
+
+        let new_msg = handle_1_bis.receiver().next().await.unwrap();
+        assert_eq!(new_msg, serde_json_bytes::json!({"test": "ok"}));
+        let new_msg = handle_1_other.receiver().next().await.unwrap();
+        assert_eq!(new_msg, serde_json_bytes::json!({"test": "ok"}));
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert!(!notify.exist(topic_1).await.unwrap());
+        assert!(!notify.exist(topic_2).await.unwrap());
     }
 }

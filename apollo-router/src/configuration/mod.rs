@@ -15,6 +15,7 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
+use std::time::Duration;
 
 use derivative::Derivative;
 use displaydoc::Display;
@@ -217,7 +218,7 @@ impl Configuration {
             #[cfg(test)]
             notify: notify.unwrap_or_default(),
             #[cfg(not(test))]
-            notify: notify.unwrap_or_else(Notify::new),
+            notify: notify.unwrap_or_else(|| Notify::with_ttl(Duration::from_secs(15))),
         };
 
         conf.validate()

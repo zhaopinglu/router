@@ -1,9 +1,9 @@
-+ Implement keep alive for callback ?
++ Add error mesage when connection closed by heartbeat
++ Clean and write MORE tests in notification.rs
 + Handle errors correctly
-+ Fix tests
-+ Write new test
 + Should we detect the right protocol for websocket ? Like trying with graphql-ws header and then with the other one to really reject the connection
 + Add auth on subscription callback
++ Do we want to make the keep alive timeout configurable ? For now it's 15secs
 
 
 BONUS
