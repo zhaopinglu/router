@@ -28,9 +28,9 @@ use crate::plugin::PluginInit;
 use crate::protocols::websocket::WebSocketProtocol;
 use crate::query_planner::OperationKind;
 use crate::register_plugin;
+use crate::services::execution;
 use crate::services::router;
 use crate::services::subgraph;
-use crate::services::supergraph;
 use crate::Endpoint;
 use crate::ListenAddr;
 
@@ -119,19 +119,27 @@ impl Plugin for Subscription {
 
     async fn new(init: PluginInit<Self::Config>) -> Result<Self, BoxError> {
         Ok(Subscription {
-            enabled: true,
+            enabled: init.config.enabled,
             notify: init.notify,
             mode: init.config.mode,
         })
     }
 
-    fn supergraph_service(&self, service: supergraph::BoxService) -> supergraph::BoxService {
+    fn execution_service(&self, service: execution::BoxService) -> execution::BoxService {
         let mode = self.mode.clone();
         ServiceBuilder::new()
-            .map_request(move |req: supergraph::Request| {
-                req.context
-                    .insert(SUBSCRIPTION_MODE_CONTEXT_KEY, mode.clone())
-                    .unwrap();
+            .map_request(move |req: execution::Request| {
+                let operation_kind = req
+                    .query_plan
+                    .query
+                    .operation(req.supergraph_request.body().operation_name.as_deref())
+                    .map(|op| *op.kind())
+                    .or_else(|| req.query_plan.query.operations.get(0).map(|op| *op.kind()));
+                if let Some(OperationKind::Subscription) = operation_kind {
+                    req.context
+                        .insert(SUBSCRIPTION_MODE_CONTEXT_KEY, mode.clone())
+                        .unwrap();
+                }
                 req
             })
             .service(service)
@@ -174,7 +182,6 @@ impl Plugin for Subscription {
     }
 }
 
-// TODO change the payload to write action inside like subscribe_subscription or delete_subscription to not depend only on HTTP method
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "kind", rename = "lowercase")]
 pub(crate) enum CallbackPayload {
@@ -318,7 +325,6 @@ impl Service<router::Request> for CallbackService {
                                     context: req.context,
                                 })
                             } else {
-                                println!("ICIIII");
                                 Ok(router::Response {
                                     response: http::Response::builder()
                                         .status(StatusCode::NOT_FOUND)
@@ -441,58 +447,21 @@ mod tests {
 
     use futures::StreamExt;
     use serde_json::Value;
-    use serde_json_bytes::json;
     use tower::util::BoxService;
     use tower::Service;
     use tower::ServiceExt;
 
     use super::*;
-    use crate::error::FetchError;
     use crate::graphql::Request;
     use crate::http_ext;
     use crate::plugin::test::MockSubgraphService;
-    use crate::plugin::test::MockSupergraphService;
     use crate::plugin::DynPlugin;
     use crate::services::SubgraphRequest;
     use crate::services::SubgraphResponse;
-    use crate::services::SupergraphRequest;
-    use crate::services::SupergraphResponse;
     use crate::Notify;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn it_test_callback_endpoint() {
-        // let mut mock_service = MockSupergraphService::new();
-        // mock_service
-        //     .expect_call()
-        //     .times(1)
-        //     .returning(move |req: SupergraphRequest| {
-        //         Ok(SupergraphResponse::fake_builder()
-        //             .context(req.context)
-        //             .data(json!({"data": {"my_value": 2usize}}))
-        //             .build()
-        //             .unwrap())
-        //     });
-
-        // let mut mock_subgraph_service = MockSubgraphService::new();
-        // mock_subgraph_service
-        //     .expect_call()
-        //     .times(1)
-        //     .returning(move |req: SubgraphRequest| {
-        //         Ok(SubgraphResponse::fake_builder()
-        //             .context(req.context)
-        //             .build())
-        //     });
-
-        // let mut mock_subgraph_service_in_error = MockSubgraphService::new();
-        // mock_subgraph_service_in_error
-        //     .expect_call()
-        //     .times(1)
-        //     .returning(move |_req: SubgraphRequest| {
-        //         Err(Box::new(FetchError::SubrequestWsError {
-        //             service: String::from("my_subgraph_name_error"),
-        //             reason: String::from("cannot contact the subgraph"),
-        //         }))
-        //     });
         let mut notify = Notify::new();
         let dyn_plugin: Box<dyn DynPlugin> = crate::plugin::plugins()
             .find(|factory| factory.name == "apollo.subscription")
@@ -515,88 +484,6 @@ mod tests {
             )
             .await
             .unwrap();
-        // let mut supergraph_service = dyn_plugin.supergraph_service(BoxService::new(mock_service));
-        // let router_req = SupergraphRequest::fake_builder().header("test", "my_value_set");
-
-        // let _router_response = supergraph_service
-        //     .ready()
-        //     .await
-        //     .unwrap()
-        //     .call(router_req.build().unwrap())
-        //     .await
-        //     .unwrap()
-        //     .next_response()
-        //     .await
-        //     .unwrap();
-
-        // let router_req = SupergraphRequest::fake_builder()
-        //     .header(
-        //         "accept",
-        //         "multipart/mixed; boundary=\"graphql\", application/json",
-        //     )
-        //     .query("subscription {\n  userWasCreated {\n    username\n  }\n}");
-
-        // let _router_response = bad_request_supergraph_service
-        //     .ready()
-        //     .await
-        //     .unwrap()
-        //     .call(router_req.build().unwrap())
-        //     .await
-        //     .unwrap()
-        //     .next_response()
-        //     .await
-        //     .unwrap();
-
-        // let mut subgraph_service =
-        //     dyn_plugin.subgraph_service("my_subgraph_name", BoxService::new(mock_subgraph_service));
-        // let subgraph_req = SubgraphRequest::fake_builder()
-        //     .subgraph_request(
-        //         http_ext::Request::fake_builder()
-        //             .header("test", "my_value_set")
-        //             .body(
-        //                 Request::fake_builder()
-        //                     .query(String::from(
-        //                         "subscription {\n  userWasCreated {\n    username\n  }\n}",
-        //                     ))
-        //                     .extensions()
-        //                     .build(),
-        //             )
-        //             .build()
-        //             .unwrap(),
-        //     )
-        //     .build();
-        // let _subgraph_response = subgraph_service
-        //     .ready()
-        //     .await
-        //     .unwrap()
-        //     .call(subgraph_req)
-        //     .await
-        //     .unwrap();
-        // // Another subgraph
-        // let mut subgraph_service = dyn_plugin.subgraph_service(
-        //     "my_subgraph_name_error",
-        //     BoxService::new(mock_subgraph_service_in_error),
-        // );
-        // let subgraph_req = SubgraphRequest::fake_builder()
-        //     .subgraph_request(
-        //         http_ext::Request::fake_builder()
-        //             .header("test", "my_value_set")
-        //             .body(
-        //                 Request::fake_builder()
-        //                     .query(String::from("query { test }"))
-        //                     .build(),
-        //             )
-        //             .build()
-        //             .unwrap(),
-        //     )
-        //     .build();
-        // let _subgraph_response = subgraph_service
-        //     .ready()
-        //     .await
-        //     .unwrap()
-        //     .call(subgraph_req)
-        //     .await
-        //     .expect_err("Must be in error");
 
         let http_req_prom = http::Request::get("http://localhost:4000/subscription/callback")
             .body(Default::default())
@@ -810,6 +697,57 @@ mod tests {
         .unwrap();
         let resp = web_endpoint.oneshot(http_req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn it_test_subgraph_service_with_subscription_disabled() {
+        let dyn_plugin: Box<dyn DynPlugin> = crate::plugin::plugins()
+            .find(|factory| factory.name == "apollo.subscription")
+            .expect("Plugin not found")
+            .create_instance(
+                &Value::from_str(r#"{}"#).unwrap(),
+                Default::default(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+
+        let mut mock_subgraph_service = MockSubgraphService::new();
+        mock_subgraph_service
+            .expect_call()
+            .times(0)
+            .returning(move |req: SubgraphRequest| {
+                Ok(SubgraphResponse::fake_builder()
+                    .context(req.context)
+                    .build())
+            });
+
+        let mut subgraph_service =
+            dyn_plugin.subgraph_service("my_subgraph_name", BoxService::new(mock_subgraph_service));
+        let subgraph_req = SubgraphRequest::fake_builder()
+            .subgraph_request(
+                http_ext::Request::fake_builder()
+                    .body(
+                        Request::fake_builder()
+                            .query(String::from(
+                                "subscription {\n  userWasCreated {\n    username\n  }\n}",
+                            ))
+                            .build(),
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .operation_kind(OperationKind::Subscription)
+            .build();
+        let subgraph_response = subgraph_service
+            .ready()
+            .await
+            .unwrap()
+            .call(subgraph_req)
+            .await
+            .unwrap();
+
+        assert_eq!(subgraph_response.response.body(), &graphql::Response::builder().data(serde_json_bytes::Value::Null).error(graphql::Error::builder().message("cannot execute a subscription if it's not enabled in the configuration").extension_code("SUBSCRIPTION_DISABLED").build()).extensions(Object::default()).build());
     }
 }
 
