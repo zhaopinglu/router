@@ -10,6 +10,6 @@ edition = "2021"
 [dependencies]
 async-trait = "0.1.64"
 apollo-router = {path = "../../apollo-router"}
-anyhow = "1.0.56"
+anyhow = "1.0.69"
 rand = "0.8.5"
 tower = "0.4.13"
